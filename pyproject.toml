@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zavolab_pyutils"
-version = "0.1.0"
+version = "0.1.2"
 description = "Genomic data analysis utilities from Zavolan Lab"
 readme = "README.md"
 license = {text = "MIT"}
@@ -30,10 +30,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zavolanlab/zavolab_PYutils"
-Documentation = "https://github.com/zavolanlab/zavolab_PYutils#readme"
-Repository = "https://github.com/zavolanlab/zavolab_PYutils"
-Issues = "https://github.com/zavolanlab/zavolab_PYutils/issues"
+Homepage = "https://github.com/zavolanlab/zavolab_pyutils"
+Documentation = "https://github.com/zavolanlab/zavolab_pyutils#readme"
+Repository = "https://github.com/zavolanlab/zavolab_pyutils"
+Issues = "https://github.com/zavolanlab/zavolab_pyutils/issues"
 
 [project.optional-dependencies]
 dev = [
