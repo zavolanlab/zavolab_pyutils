@@ -1,7 +1,3 @@
-import pandas as pd
-import numpy as np
-import logging
-
 """
 Utilities for analyzing read count data stored as pandas DataFrames.
 Includes library size normalization, mean-variance relationship analysis,
@@ -9,6 +5,9 @@ funtions for differential expression testing and differetial relative usage test
 (e.g. alternative splicing, AS and alternative polyadenylation, APA).
 """
 
+import pandas as pd
+import numpy as np
+import logging
 
 def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1):
     """

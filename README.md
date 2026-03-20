@@ -1,4 +1,4 @@
-# zavolab_PYutils
+# zavolab_pyutils
 
 Genomic data analysis utilities from the Zavolan Lab. A collection of Python utilities for common bioinformatics tasks including library size normalization, annotation conversion, and other genomic data analysis operations.
 
@@ -12,8 +12,8 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 
 ### From source
 ```bash
-git clone https://github.com/zavolab/zavolab_PYutils.git
-cd zavolab_PYutils
+git clone https://github.com/zavolab/zavolab_pyutils.git
+cd zavolab_pyutils
 pip install -e .
 ```
 
@@ -24,8 +24,8 @@ conda install -c bioconda zavolab_pyutils
 
 ### Development installation
 ```bash
-git clone https://github.com/zavolab/zavolab_PYutils.git
-cd zavolab_PYutils
+git clone https://github.com/zavolab/zavolab_pyutils.git
+cd zavolab_pyutils
 pip install -e ".[dev]"
 ```
 
@@ -89,7 +89,7 @@ Please ensure all tests pass and add new tests for new functionality.
 
 ## Citation
 
-If you use zavolab_PYutils in your research, please cite:
+If you use zavolab_pyutils in your research, please cite:
 
 ```
 TODO: Add citation information

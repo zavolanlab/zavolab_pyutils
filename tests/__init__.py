@@ -1,3 +1,3 @@
 """
-Tests for zavolab_PYutils package.
+Tests for zavolab_pyutils package.
 """
