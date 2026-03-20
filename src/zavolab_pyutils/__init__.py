@@ -1,5 +1,5 @@
 """
-zavolab_PYutils: Genomic data analysis utilities
+zavolab_pyutils: Genomic data analysis utilities
 
 A collection of utilities for common genomic data analysis tasks including
 library size normalization, annotation conversion, visualization, and other bioinformatics operations.
