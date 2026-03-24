@@ -9,7 +9,12 @@ from .read_count_data_analysis import deseq2_normalize
 from .annotation import convert_gff_to_gtf, convert_gtf_to_gff, parse_gtf_attributes
 from .visualization import plot_size_factors
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version
+    __version__ = version("zavolab_pyutils")
+except Exception:
+    __version__ = "unknown"
+    
 __author__ = "Zavolan Lab"
 __license__ = "MIT"
 

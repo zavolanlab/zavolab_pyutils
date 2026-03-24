@@ -4,7 +4,7 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 
 ## Features
 
-- **Library Size Normalization**: Multiple normalization methods (TMM, TPM, quantile, median)
+- **Library Size Normalization**: Deseq2-like normalization
 - **Annotation Conversion**: Convert between GTF and GFF3 formats
 - **Genomic Data Processing**: Utilities for working with genomic annotation files
 
@@ -69,28 +69,16 @@ For detailed documentation, see the [docs](docs/) directory. **TO DO**
 
 For a working example, see [test_module.ipynb](test_module.ipynb) which demonstrates the `deseq2_normalize` function with sample data.
 
-## Testing
-
-Run the test suite with pytest:
-
-```bash
-pytest tests/
-```
-
-Run with coverage:
-
-```bash
-pytest tests/ --cov=src/zavolab_pyutils
-```
+## Testing **TO DO**
 
 ## Contributing
 
 Contributions are welcome! Please:
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+2. Create a feature branch (`git checkout -b feature/new-feature`)
+3. Commit your changes (`git commit -m 'Add new feature'`)
+4. Push to the branch (`git push origin feature/new-feature`)
 5. Open a Pull Request
 
 Please ensure all tests pass and add new tests for new functionality.
