@@ -45,6 +45,7 @@ def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1)
     # 1. Filter low-expressed genes from Size Factor calculation
     # We use log-space to prevent overflow: geometric_mean = 2**(mean(log(x)))
     # We only care about genes with >0 counts in ALL samples for the reference
+    # test
     df_work['mean'] = df_work.mean(axis=1)
     threshold = max(df_work['mean'].quantile(lowExprGenesQ),0)
     high_expr_genes = df_work[(df_work['geom_mean'] > threshold)&(df_work[sample_list].min(axis=1) > 0)].index
