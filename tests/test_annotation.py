@@ -3,7 +3,7 @@ Tests for annotation module.
 """
 
 import pytest
-from genomic_utils.annotation import parse_gtf_attributes, convert_gff_to_gtf, convert_gtf_to_gff
+from zavolab_pyutils.annotation import parse_gtf_attributes, convert_gff_to_gtf, convert_gtf_to_gff
 
 
 class TestAnnotation:

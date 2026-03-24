@@ -17,16 +17,24 @@ cd zavolab_pyutils
 pip install -e .
 ```
 
-### From conda (after bioconda release)
+### With conda environment
+Create a conda environment from the provided `environment.yml` file:
+
 ```bash
-conda install -c bioconda zavolab_pyutils
+conda env create -f environment.yml
+conda activate zavolab_pyutils
 ```
 
-### Development installation
+The environment automatically installs the package and all dependencies including ipykernel for Jupyter notebook support.
+
+### From PyPI (TO DO)
 ```bash
-git clone https://github.com/zavolab/zavolab_pyutils.git
-cd zavolab_pyutils
-pip install -e ".[dev]"
+pip install zavolab_pyutils
+```
+
+### From bioconda (TO DO)
+```bash
+conda install -c bioconda zavolab_pyutils
 ```
 
 ## Quick Start
@@ -34,32 +42,32 @@ pip install -e ".[dev]"
 ### Library Size Normalization
 
 ```python
-import numpy as np
-from genomic_utils import normalize_by_library_size
+import pandas as pd
+from zavolab_pyutils.read_count_data_analysis import deseq2_normalize
 
-# Sample count matrix (genes × samples)
-counts = np.array([
-    [100, 200, 150],
-    [50, 100, 80],
-    [200, 400, 300],
-])
+# Create sample count matrix (genes × samples) as a DataFrame
+data = {
+    "Sample_1": [100, 50, 200],
+    "Sample_2": [200, 100, 400],
+    "Sample_3": [150, 80, 300],
+}
+counts_df = pd.DataFrame(data, index=["Gene_1", "Gene_2", "Gene_3"])
 
-# Normalize by library size (TMM method)
-normalized = normalize_by_library_size(counts, method="tmm")
+# Normalize using DESeq2 method
+norm_counts_df, size_factors_df = deseq2_normalize(
+    counts_df, 
+    sample_list=["Sample_1", "Sample_2", "Sample_3"]
+)
+
+print(norm_counts_df)
+print(size_factors_df)
 ```
 
-### Annotation Conversion
+## Documentation and examples of usage
 
-```python
-from genomic_utils import convert_gff_to_gtf
+For detailed documentation, see the [docs](docs/) directory. **TO DO**
 
-# Convert GFF3 to GTF format
-convert_gff_to_gtf("input.gff3", "output.gtf")
-```
-
-## Documentation
-
-For detailed documentation, see the [docs](docs/) directory.
+For a working example, see [test_module.ipynb](test_module.ipynb) which demonstrates the `deseq2_normalize` function with sample data.
 
 ## Testing
 
@@ -72,7 +80,7 @@ pytest tests/
 Run with coverage:
 
 ```bash
-pytest tests/ --cov=src/genomic_utils
+pytest tests/ --cov=src/zavolab_pyutils
 ```
 
 ## Contributing

@@ -4,7 +4,7 @@ Tests for normalization module.
 
 import pytest
 import numpy as np
-from genomic_utils.normalization import normalize_by_library_size, compute_library_sizes
+from zavolab_pyutils.normalization import normalize_by_library_size, compute_library_sizes
 
 
 class TestNormalization:
