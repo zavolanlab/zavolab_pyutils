@@ -26,10 +26,6 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
     
     x_feature, y_feature = "read_sum_mln", "sf"
     
-    hue = "fraction"
-    hue_order = ["F", "T"]
-    palette = ["orange", "teal"]
-    
     ax = sns.scatterplot(
         ax=axes,
         data=data,
@@ -39,9 +35,7 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
         alpha=alpha_param,
         edgecolor="black",
         linewidth=0.5,
-        hue=hue,
-        hue_order=hue_order,
-        palette=palette,
+        color='teal',
     )
 
     spearman_corr = stats.spearmanr(a=data[x_feature],b=data[y_feature])[0]
@@ -57,7 +51,6 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
           title="spearman corr = "+str(np.round(spearman_corr,2)))
     ax.tick_params(left=True, bottom=True)
     
-    ax.legend(bbox_to_anchor=(1.05, 1.0), loc=2, borderaxespad=0.0, title="fraction", ncols=1)
     if outdir:
         try:
             os.makedirs(outdir, exist_ok=True)
