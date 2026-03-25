@@ -21,7 +21,7 @@ pip install -e .
 Create a conda environment from the provided `environment.yml` file:
 
 ```bash
-conda env create -f environment.yml
+conda env create --file=environment.yml
 conda activate zavolab_pyutils
 ```
 
@@ -93,7 +93,7 @@ TODO: Add citation information
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Support
 
@@ -101,4 +101,4 @@ For issues, questions, or suggestions, please open an issue on GitHub.
 
 ## Acknowledgments
 
-Developed by the [Zavolan Lab](https://zavolab.org) at the University of Basel.
+Developed by the Zavolan Lab at the University of Basel.

@@ -48,7 +48,7 @@ def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1)
     # test
     df_work['mean'] = df_work.mean(axis=1)
     threshold = max(df_work['mean'].quantile(lowExprGenesQ),0)
-    high_expr_genes = df_work[(df_work['geom_mean'] > threshold)&(df_work[sample_list].min(axis=1) > 0)].index
+    high_expr_genes = df_work[(df_work['mean'] > threshold)&(df_work[sample_list].min(axis=1) > 0)].index
     
     # Slice only highly expressed genes
     ref_genes_df = df_work.loc[high_expr_genes].copy()
@@ -78,6 +78,8 @@ def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1)
     
     # 6. Apply Normalization to the original matrix
     # Apply pseudocount to original counts and divide by the size factors
-    norm_counts = (df_work[sample_list]+pseudocount).div(sfs_df['sf'], axis=1)
+    norm_counts_df = (df_work[sample_list]+pseudocount).div(sfs_df['sf'], axis=1)
     
-    return norm_counts, sfs_df
+    return norm_counts_df, sfs_df
+
+
