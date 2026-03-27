@@ -1,5 +1,4 @@
 from pathlib import Path
-import subprocess
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -107,7 +106,9 @@ def pca_plot(
     plot_lims=None,
     legend_title="",
     highlight_samples_list=None,
-    calculate_permanova_R2=False):
+    calculate_permanova_R2=False,
+    add_2D_KDE_countours=False,
+    bw_adjust=1.75,alpha_param=0.9, s_param=10,figsize=(5.2,5.2),legend_markerscale=1.5):
     """
     Performs Principal Component Analysis (PCA) and generates a customized 2D scatter plot.
 
@@ -181,11 +182,9 @@ def pca_plot(
     # PCA-only
     ###
 
-    bw_adjust = 1.75
-    alpha_param, s_param = 0.9, 10
     sns.set(font_scale=1.2)
     sns.set_style("white")
-    fig, axes = plt.subplots(1, 1, sharey=False, sharex=False, figsize=(5.2, 5.2))
+    fig, axes = plt.subplots(1, 1, sharey=False, sharex=False, figsize=figsize)
 
     ax = sns.scatterplot(
         data=principalDf,
@@ -216,20 +215,20 @@ def pca_plot(
             palette=palette,
             legend=False,
         )
-
-    k = 0
-    for cat in hue_order:
-        cat_data = principalDf.loc[principalDf[hue] == cat]
-        if len(cat_data) >= 3:
-            ax = sns.kdeplot(
-                data=cat_data,
-                x=x_feature,
-                y=y_feature,
-                fill=False,
-            levels=[0.25],
-            bw_adjust=bw_adjust,
-            color=palette[k])
-        k = k + 1
+    if add_2D_KDE_countours:
+        k = 0
+        for cat in hue_order:
+            cat_data = principalDf.loc[principalDf[hue] == cat]
+            if len(cat_data) >= 3:
+                ax = sns.kdeplot(
+                    data=cat_data,
+                    x=x_feature,
+                    y=y_feature,
+                    fill=False,
+                levels=[0.25],
+                bw_adjust=bw_adjust,
+                color=palette[k])
+            k = k + 1
 
     ax.set(
         xlabel="PC1, "
@@ -256,7 +255,7 @@ def pca_plot(
         loc=2,
         borderaxespad=0.0,
         title=legend_title,
-        markerscale=2.5,
+        markerscale=legend_markerscale,
         ncol=1,
     )
 
