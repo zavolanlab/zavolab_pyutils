@@ -10,6 +10,9 @@ import numpy as np
 from scipy.spatial import distance
 from sklearn.metrics.pairwise import pairwise_distances
 
+from scipy import stats
+from statsmodels.regression.quantile_regression import QuantReg
+
 def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1):
     """
     Performs DESeq2-style median-of-ratios normalization.
@@ -143,3 +146,71 @@ def get_MultiDimR2(x, groups, R2adjusted=True):
         R2 = 1 - RSS / TSS
     
     return R2
+
+def model_mean_variance(
+    norm_counts_df, 
+    metadata_df, 
+    sample_col='sample', 
+    cond_col='condition',
+    CI_limit=0.95,
+    outlier_q=0.9,
+    max_iter_QuantReg=1000):
+    """
+    Estimates the mean-variance relationship within every condition individually
+    to account for condition-specific between-replicate variability.
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    common_samples = norm_counts_df.columns.intersection(sample_map.index)
+    
+    resid_df = norm_counts_df[common_samples].copy()
+    sample_map = sample_map[common_samples]
+    
+    regr_models = []
+    plot_data_list = []
+    
+    # Correction for Multiple testing across conditions using Bonferroni approach
+    N_conditions = len(sample_map.unique())
+    adjCI_limit = 1 - (1 - CI_limit) / N_conditions
+    Low_q = (1 - adjCI_limit) / 2
+    Up_q = 1 - Low_q
+    
+    for cond in sample_map.unique():
+        samples_in_cond = sample_map[sample_map == cond].index
+        n_reps = len(samples_in_cond)
+        
+        if n_reps < 2:
+            print(f"Skipping {cond}: Need at least 2 replicates to compute variance.")
+            continue 
+        
+        cond_data = resid_df[samples_in_cond].values
+        
+        # Calculate exact empirical statistics per gene for this condition
+        gene_means = np.mean(cond_data, axis=1)
+        gene_vars = np.var(cond_data, axis=1, ddof=1)
+        
+        df_cond = pd.DataFrame({
+            'mean': gene_means,
+            'var': gene_vars,
+            'mean_2': gene_means**2,
+            'condition': cond
+        }, index=resid_df.index)
+        
+        # Exclude zeros and extreme outliers to ensure a robust fit
+        data = df_cond[(df_cond['mean'] > 0) & (df_cond['mean'] < df_cond['mean'].quantile(outlier_q))].copy()
+        
+        # Model the overdispersion using Quantile Regression
+        X = data[['mean_2']].values
+        y = (data['var'] - data['mean']).values # Fit: var - mean
+        
+        mod = QuantReg(endog=y, exog=X)
+        reg = mod.fit(q=0.5, max_iter=max_iter_QuantReg)
+        
+        data['QuantReGpred_var'] = reg.predict(X) + data['mean']
+        
+        regr_models.append([cond, 'QuantReg', 'var', reg.params[0]])
+        plot_data_list.append(data)
+        
+    RegrModel_df = pd.DataFrame(regr_models, columns=['condition', 'model_type', 'pred_feature', 'param'])
+    all_plot_data = pd.concat(plot_data_list)
+    
+    return RegrModel_df, all_plot_data

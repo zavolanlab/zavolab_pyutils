@@ -5,6 +5,8 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 ## Features
 
 - **Library Size Normalization**: Deseq2-like normalization
+- **Mean-Variance Modeling**: Condition-specific overdispersion estimation for RNA-seq counts using Quantile Regression
+- **Visualization of expression levels across conditions for selected genes**: Empirical Bayes confidence interval plotting using the Negative Binomial distribution
 - **Annotation Conversion**: Convert between GTF and GFF3 formats
 - **Genomic Data Processing**: Utilities for working with genomic annotation files
 
@@ -61,6 +63,36 @@ norm_counts_df, size_factors_df = deseq2_normalize(
 
 print(norm_counts_df)
 print(size_factors_df)
+```
+
+### Mean-Variance Modeling and Confidence Intervals
+
+```python
+from zavolab_pyutils.read_count_data_analysis import model_mean_variance
+from zavolab_pyutils.visualization import plot_gene_expression_with_ci
+
+# 1. Define your sample metadata
+metadata_df = pd.DataFrame({
+    "sample": ["Sample_1", "Sample_2", "Sample_3"],
+    "condition": ["Control", "Control", "Treatment"]
+})
+
+# 2. Model the condition-specific dispersion (alpha) using Quantile Regression
+regr_model_df, plot_data = model_mean_variance(
+    norm_counts_df, 
+    metadata_df, 
+    sample_col='sample', 
+    cond_col='condition'
+)
+
+# 3. Plot specific genes with Negative Binomial Confidence Intervals
+plot_gene_expression_with_ci(
+    norm_counts_df, 
+    metadata_df, 
+    selected_genes=["Gene_1", "Gene_2"], 
+    regr_model_df=regr_model_df, 
+    savefig_path='./gene_expression_plot.png'
+)
 ```
 
 ## Documentation and examples of usage
