@@ -7,6 +7,8 @@ funtions for differential expression testing and differetial relative usage test
 
 import pandas as pd
 import numpy as np
+from scipy.spatial import distance
+from sklearn.metrics.pairwise import pairwise_distances
 
 def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1):
     """
@@ -82,4 +84,44 @@ def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1)
     
     return norm_counts_df, sfs_df
 
-
+def get_MultiDimR2(x,sample_order_df,hue,hue_order,R2adjusted=True):
+    """
+    Calculates the PERMANOVA R2 value for a given dataset and sample grouping.
+    
+    Parameters
+    ----------
+    x : np.ndarray
+        Data matrix (samples (rows) x features (columns)) for which to calculate PERMANOVA R2.
+    sample_order_df : pd.DataFrame
+        DataFrame containing sample metadata, including the grouping variable specified by `hue`.
+    hue : str
+        Column name in `sample_order_df` specifying the grouping variable.
+    hue_order : list
+        List of unique values in `hue` specifying the order of groups.
+    R2adjusted : bool, optional
+        Whether to calculate the adjusted R2 value. Default is True.
+        
+    Returns
+    -------
+    R2 : float
+        The PERMANOVA R2 value for the given dataset and sample grouping.
+    """
+    
+    centroid = np.mean(x,axis=0)
+    all_distances = pairwise_distances(x, [centroid], metric='sqeuclidean',)
+    TSS = np.sum(all_distances)
+    
+    RSS = 0
+    for hue_cat in hue_order:
+        l = list(sample_order_df.loc[sample_order_df[hue] == hue_cat]['index'])
+        hue_cat_centroid = np.mean(x[l],axis=0)
+        hue_cat_distances = pairwise_distances(x[l], [hue_cat_centroid], metric='sqeuclidean',)
+        RSS = RSS+np.sum(hue_cat_distances)
+    if R2adjusted:
+        df_RSS = len(x)-len(hue_order)-1
+        df_total = len(x)-1
+        R2 = 1-(RSS/df_RSS)/(TSS/df_total)
+    else:
+        R2 = 1-RSS/TSS
+    
+    return R2
