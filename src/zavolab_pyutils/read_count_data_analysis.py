@@ -84,20 +84,17 @@ def deseq2_normalize(counts_df, sample_list, lowExprGenesQ=0.3, pseudocount = 1)
     
     return norm_counts_df, sfs_df
 
-def get_MultiDimR2(x,sample_order_df,hue,hue_order,R2adjusted=True):
+def get_MultiDimR2(x, groups, R2adjusted=True):
     """
     Calculates the PERMANOVA R2 value for a given dataset and sample grouping.
     
     Parameters
     ----------
     x : np.ndarray
-        Data matrix (samples (rows) x features (columns)) for which to calculate PERMANOVA R2.
-    sample_order_df : pd.DataFrame
-        DataFrame containing sample metadata, including the grouping variable specified by `hue`.
-    hue : str
-        Column name in `sample_order_df` specifying the grouping variable.
-    hue_order : list
-        List of unique values in `hue` specifying the order of groups.
+        Data matrix (samples (rows) x features (columns)) for which to calculate PERMANOVA R2 along samples.
+    groups : list or np.ndarray
+        A 1D sequence (list, array, or pandas Series) of group labels for each sample.
+        Must have the exact same length as the number of rows in `x`.
     R2adjusted : bool, optional
         Whether to calculate the adjusted R2 value. Default is True.
         
@@ -106,22 +103,43 @@ def get_MultiDimR2(x,sample_order_df,hue,hue_order,R2adjusted=True):
     R2 : float
         The PERMANOVA R2 value for the given dataset and sample grouping.
     """
+    # Ensure inputs are numpy arrays for efficient masking
+    x = np.asarray(x)
+    groups = np.asarray(groups)
     
-    centroid = np.mean(x,axis=0)
-    all_distances = pairwise_distances(x, [centroid], metric='sqeuclidean',)
+    # 1. Validation Check: Match rows in x to the length of groups
+    if x.shape[0] != groups.shape[0]:
+        raise ValueError(
+            f"Shape mismatch: The data matrix 'x' has {x.shape[0]} samples (rows), "
+            f"but {groups.shape[0]} group labels were provided."
+        )
+    
+    # Calculate Total Sum of Squares (TSS)
+    centroid = np.mean(x, axis=0)
+    all_distances = pairwise_distances(x, [centroid], metric='sqeuclidean')
     TSS = np.sum(all_distances)
     
+    # Calculate Residual Sum of Squares (RSS)
     RSS = 0
-    for hue_cat in hue_order:
-        l = list(sample_order_df.loc[sample_order_df[hue] == hue_cat]['index'])
-        hue_cat_centroid = np.mean(x[l],axis=0)
-        hue_cat_distances = pairwise_distances(x[l], [hue_cat_centroid], metric='sqeuclidean',)
-        RSS = RSS+np.sum(hue_cat_distances)
+    unique_groups = np.unique(groups)
+    
+    for group in unique_groups:
+        # Create a boolean mask for the current group
+        mask = (groups == group)
+        group_data = x[mask]
+        
+        # Calculate distances to the group-specific centroid
+        if len(group_data) > 0:
+            group_centroid = np.mean(group_data, axis=0)
+            group_distances = pairwise_distances(group_data, [group_centroid], metric='sqeuclidean')
+            RSS += np.sum(group_distances)
+            
+    # Calculate R2
     if R2adjusted:
-        df_RSS = len(x)-len(hue_order)-1
-        df_total = len(x)-1
-        R2 = 1-(RSS/df_RSS)/(TSS/df_total)
+        df_RSS = len(x) - len(unique_groups) - 1
+        df_total = len(x) - 1
+        R2 = 1 - (RSS / df_RSS) / (TSS / df_total)
     else:
-        R2 = 1-RSS/TSS
+        R2 = 1 - RSS / TSS
     
     return R2
