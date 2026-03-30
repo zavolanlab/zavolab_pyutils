@@ -450,3 +450,195 @@ def plot_mean_variance_diagnostics(all_plot_data, savefig_path):
     dir_path = Path(savefig_path).parent
     dir_path.mkdir(parents=True, exist_ok=True)
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+
+def plot_mean_vs_cv(
+    norm_counts_df, metadata_df, savefig_path, 
+    sample_col='sample', cond_col='condition', is_log2=False
+):
+    """
+    Plots Mean Expression vs Coefficient of Variation (CV).
+    
+    Systematic correlations between CVs and the mean of normalized expression 
+    levels reflect to what extent a normalization method has failed to correct 
+    for Poisson sampling noise. Ideally, the correlation should be near zero.
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    common_samples = norm_counts_df.columns.intersection(sample_map.index)
+    
+    df_work = norm_counts_df[common_samples].copy()
+    if is_log2:
+        df_work = 2 ** df_work # Convert to linear scale for standard CV calculation
+        
+    conditions = sample_map[common_samples].unique()
+    sns.set(font_scale=1, style="white")
+    fig, axes = plt.subplots(1, len(conditions), figsize=(5 * len(conditions), 5))
+    if len(conditions) == 1: axes = [axes]
+        
+    for i, cond in enumerate(conditions):
+        samples_in_cond = sample_map[sample_map == cond].index
+        if len(samples_in_cond) < 2: continue
+            
+        cond_data = df_work[samples_in_cond].values
+        means = np.mean(cond_data, axis=1)
+        stds = np.std(cond_data, axis=1, ddof=1)
+        
+        # Filter zero means
+        mask = means > 0
+        means, stds = means[mask], stds[mask]
+        cvs = stds / means
+        
+        # Calculate correlations on log10 values to prevent skewing by extreme outliers
+        log_means = np.log10(means + 1e-6)
+        log_cvs = np.log10(cvs + 1e-6)
+        
+        pearson_r, _ = stats.pearsonr(log_means, log_cvs)
+        spearman_r, _ = stats.spearmanr(means, cvs)
+        
+        ax = axes[i]
+        sns.scatterplot(x=means, y=cvs, ax=ax, s=5, alpha=0.3, color='teal')
+        ax.set(
+            xscale='log', yscale='log', 
+            xlabel='Mean Expression', ylabel='Coefficient of Variation (CV)',
+            title=f"{cond}\nPearson: {pearson_r:.2f} | Spearman: {spearman_r:.2f}"
+        )
+        
+    fig.tight_layout()
+    dir_path = Path(savefig_path).parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+def plot_sanity_gene_expression_with_ci(
+    sample_norm_df, means_df, errors_df, metadata_df, selected_genes, 
+    savefig_path, sample_col='sample', cond_col='condition', CI_limit=0.95
+):
+    """
+    Plots Sanity log2 normalized counts with Bayesian 95% CI error bars.
+    """
+    common_genes = [g for g in selected_genes if g in sample_norm_df.index]
+    
+    melted = sample_norm_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
+    melted = pd.melt(melted, id_vars=['gene_name'], var_name=sample_col, value_name='log2_expr')
+    melted = pd.merge(metadata_df[[sample_col, cond_col]], melted, how='right', on=sample_col)
+    
+    order = sorted(melted[cond_col].unique())
+    z_score = stats.norm.ppf(1 - (1 - CI_limit) / 2) # e.g., 1.96 for 95% CI
+    
+    sns.set(font_scale=1, style="white")
+    fig, axes = plt.subplots(1, len(common_genes), sharey=True, figsize=(2.8*len(common_genes), 5.2))
+    if len(common_genes) == 1: axes = [axes]
+        
+    for k, gene in enumerate(common_genes):
+        ax = axes[k]
+        gene_data = melted[melted['gene_name'] == gene]
+        
+        # Prepare condition statistics
+        y_pos = np.arange(len(order))
+        log2_means = means_df.loc[gene, order].values
+        err_margins = errors_df.loc[gene, order].values * z_score
+        
+        ax.plot(log2_means, y_pos, color='grey', zorder=1, alpha=0.7)
+        ax.errorbar(
+            log2_means, y_pos, xerr=err_margins, 
+            fmt='o', color='black', capsize=4, zorder=2, markersize=5
+        )
+        sns.stripplot(
+            ax=ax, data=gene_data, x='log2_expr', y=cond_col, 
+            order=order, color='white', size=4, edgecolor='black', 
+            linewidth=1, alpha=0.5, zorder=3, jitter=True
+        )
+        
+        ax.set(title=gene, ylabel='', xlabel='$log_2~expr$')
+        if k > 0: ax.tick_params(left=False)
+        
+    dir_path = Path(savefig_path).parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+def plot_expr_vs_libsize_correlation(
+    raw_counts_df, norm_counts_df, metadata_df, savefig_path, 
+    sample_col='sample', cond_col='condition', method='spearman', separate_conditions=False
+):
+    """
+    Plots the histogram of correlations between normalized gene expression 
+    and raw sample library sizes. 
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    common_samples = norm_counts_df.columns.intersection(sample_map.index)
+    
+    X_norm = norm_counts_df[common_samples].values
+    y_lib_sizes = raw_counts_df[common_samples].sum(axis=0).values
+    conditions = sample_map[common_samples].values
+    
+    # Fast Vectorized Correlation calculation
+    def calc_corr(X, y, corr_method):
+        if corr_method == 'spearman':
+            X = stats.rankdata(X, axis=1)
+            y = stats.rankdata(y)
+        X_m = X - np.mean(X, axis=1, keepdims=True)
+        y_m = y - np.mean(y)
+        cov = np.sum(X_m * y_m, axis=1)
+        var_X = np.sum(X_m**2, axis=1)
+        var_y = np.sum(y_m**2)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return cov / np.sqrt(var_X * var_y)
+
+    sns.set(font_scale=1, style="white")
+    
+    if separate_conditions:
+        unique_conds = np.unique(conditions)
+        fig, axes = plt.subplots(1, len(unique_conds), figsize=(5 * len(unique_conds), 4), sharey=True)
+        if len(unique_conds) == 1: axes = [axes]
+        
+        for i, cond in enumerate(unique_conds):
+            mask = conditions == cond
+            corrs = calc_corr(X_norm[:, mask], y_lib_sizes[mask], method)
+            corrs = corrs[~np.isnan(corrs)] # Drop NaNs (genes with zero variance)
+            
+            sns.histplot(corrs, ax=axes[i], bins=50, color='royalblue', kde=True)
+            axes[i].set(title=f"{cond} (Median: {np.median(corrs):.2f})", xlabel=f'{method.title()} Correlation', xlim=(-1, 1))
+    else:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        corrs = calc_corr(X_norm, y_lib_sizes, method)
+        corrs = corrs[~np.isnan(corrs)]
+        
+        sns.histplot(corrs, ax=ax, bins=50, color='royalblue', kde=True)
+        ax.set(title=f"All Samples (Median: {np.median(corrs):.2f})", xlabel=f'{method.title()} Correlation', xlim=(-1, 1))
+        
+    fig.tight_layout()
+    dir_path = Path(savefig_path).parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
+    """
+    Plots the inferred biological variance (v_g) against mean log2 expression.
+    Highlights how the algorithm treats lowly vs. highly expressed genes.
+    """
+    # Calculate approximate base expression across all conditions
+    base_expr = means_df.mean(axis=1)
+    
+    plot_df = pd.DataFrame({
+        'log2_expr': base_expr,
+        'v_g': vg_df['inferred_v_g']
+    })
+    
+    sns.set(font_scale=1, style="white")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    
+    sns.lineplot(data=plot_df, x='log2_expr', y='v_g', ax=ax, color='teal')
+    
+    if true_vg is not None:
+        ax.axhline(true_vg, color='red', linestyle='--', label=f'True Simulated v_g ({true_vg})')
+        ax.legend()
+        
+    ax.set(
+        title="Inferred Biological Variance vs. Mean Expression",
+        xlabel="Mean Log2 Expression",
+        ylabel="Inferred Biological Variance (v_g)"
+    )
+    
+    fig.tight_layout()
+    dir_path = Path(savefig_path).parent
+    dir_path.mkdir(parents=True, exist_ok=True)
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
