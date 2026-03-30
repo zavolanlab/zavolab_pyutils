@@ -29,7 +29,29 @@ def simulate_negative_binomial_counts(
 ):
     """
     Simulates RNA-seq counts using a Poisson-Gamma mixture (Negative Binomial).
-    This mimics the generative assumptions of DESeq2.
+    Mimics the generative assumptions of DESeq2.
+    
+    Parameters
+    ----------
+    N_genes : int, optional
+        Number of genes to simulate. Default is 3000.
+    conditions : list of str, optional
+        List of biological conditions. Default is ["Control", "Treatment"].
+    n_replicates : int, optional
+        Number of biological replicates per condition. Default is 3.
+    alpha : float, optional
+        True biological dispersion parameter (Variance = Mean + alpha * Mean^2). Default is 0.05.
+    seed : int, optional
+        Random seed for reproducibility. Default is 42.
+        
+    Returns
+    -------
+    counts_df : pd.DataFrame
+        Simulated raw count matrix (genes x samples).
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to biological conditions.
+    scaling_factors : np.ndarray
+        The true, hidden library size scaling factors used during generation.
     """
     samples, metadata_df, scaling_factors = _generate_metadata_and_factors(conditions, n_replicates, SF_sigma=SF_sigma, seed=seed)
     
@@ -67,7 +89,29 @@ def simulate_poisson_lognormal_counts(
 ):
     """
     Simulates RNA-seq counts using a Poisson-LogNormal mixture.
-    This mimics the generative assumptions of the Sanity Bayesian model.
+    Mimics the generative assumptions of the Sanity Bayesian model.
+    
+    Parameters
+    ----------
+    N_genes : int, optional
+        Number of genes to simulate. Default is 3000.
+    conditions : list of str, optional
+        List of biological conditions. Default is ["Control", "Treatment"].
+    n_replicates : int, optional
+        Number of biological replicates per condition. Default is 3.
+    v_log : float, optional
+        True biological variance (v_g) of the log-fold changes. Default is 0.05.
+    seed : int, optional
+        Random seed for reproducibility. Default is 42.
+        
+    Returns
+    -------
+    counts_df : pd.DataFrame
+        Simulated raw count matrix (genes x samples).
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to biological conditions.
+    scaling_factors : np.ndarray
+        The true, hidden library size scaling factors used during generation.
     """
     samples, metadata_df, scaling_factors = _generate_metadata_and_factors(conditions, n_replicates, SF_sigma=SF_sigma, seed=seed)
     

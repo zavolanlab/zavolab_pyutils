@@ -22,25 +22,14 @@ def plot_size_factors(sfs_df, savefig_path, log_scale=False):
     """
     Plots the diagnostic relationship between library sizes and DESeq2 size factors.
 
-    Generates a scatter plot with a calculated Spearman correlation to verify 
-    normalization behavior. Ideally, size factors should scale linearly with 
-    sequencing depth.
-
     Parameters
     ----------
     sfs_df : pandas.DataFrame
-        DataFrame containing size factors and read sums. Must include the 
-        columns 'sf' (size factor) and 'read_sum_mln' (millions of reads).
+        DataFrame containing size factors and read sums. 
     savefig_path : str or pathlib.Path
         Output path where the generated plot will be saved.
     log_scale : bool, optional
-        If True, applies a log2 transformation to both axes. A small pseudocount 
-        is added to read sums to prevent log(0). Default is False.
-
-    Returns
-    -------
-    None
-        Saves the plot to `savefig_path`.
+        If True, applies a log2 transformation to both axes. Default is False.
     """
     data = sfs_df.copy()
     if log_scale:
@@ -457,15 +446,26 @@ def plot_mean_vs_cv(
     """
     Plots Mean Expression vs Coefficient of Variation (CV).
     
-    Systematic correlations between CVs and the mean of normalized expression 
-    levels reflect to what extent a normalization method has failed to correct 
-    for Poisson sampling noise. Ideally, the correlation should be near zero.
-    
+    Parameters
+    ----------
+    norm_counts_df : pd.DataFrame
+        Normalized count matrix.
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to conditions.
+    savefig_path : str or pathlib.Path
+        Output file path.
+    sample_col : str, optional
+        Column name in metadata_df. Default is 'sample'.
+    cond_col : str, optional
+        Column name in metadata_df. Default is 'condition'.
+    is_log2 : bool, optional
+        Set to True if norm_counts_df is in log2 scale (e.g., Sanity output). 
+        Set to False for linear scale (e.g., DESeq2). Default is False.
+        
     Returns
     -------
     plot_data_df : pd.DataFrame
-        A long-format DataFrame containing the 'gene', 'condition', 
-        'log2_mean', and 'log10_cv' for each data point plotted.
+        A long-format DataFrame containing 'gene', 'condition', 'log2_mean', and 'log10_cv'.
     """
     sample_map = metadata_df.set_index(sample_col)[cond_col]
     common_samples = norm_counts_df.columns.intersection(sample_map.index)
@@ -537,7 +537,26 @@ def plot_sanity_gene_expression_with_ci(
     savefig_path, sample_col='sample', cond_col='condition', CI_limit=0.95
 ):
     """
-    Plots Sanity log2 normalized counts with Bayesian 95% CI error bars.
+    Plots Sanity log2 normalized counts with Bayesian CI error bars.
+    
+    Parameters
+    ----------
+    sample_norm_df : pd.DataFrame
+        Sample-level normalized gene expression counts (log2 scale).
+    means_df : pd.DataFrame
+        Estimated mean log2 expression level per condition.
+    errors_df : pd.DataFrame
+        Estimated standard errors per condition.
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to conditions.
+    selected_genes : list of str
+        List of genes to plot.
+    savefig_path : str or pathlib.Path
+        Output file path.
+    sample_col, cond_col : str, optional
+        Column names in metadata.
+    CI_limit : float, optional
+        Confidence interval threshold. Default is 0.95 (95% CI).
     """
     common_genes = [g for g in selected_genes if g in sample_norm_df.index]
     
@@ -584,8 +603,24 @@ def plot_expr_vs_libsize_correlation(
     sample_col='sample', cond_col='condition', method='spearman', separate_conditions=False
 ):
     """
-    Plots the histogram of correlations between normalized gene expression 
-    and raw sample library sizes. 
+    Plots the histogram of correlations between normalized expression and library sizes.
+    
+    Parameters
+    ----------
+    raw_counts_df : pd.DataFrame
+        Unnormalized count matrix used to calculate library depth.
+    norm_counts_df : pd.DataFrame
+        Normalized count matrix.
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to conditions.
+    savefig_path : str or pathlib.Path
+        Output file path.
+    sample_col, cond_col : str, optional
+        Column names in metadata.
+    method : str, optional
+        Correlation method ('spearman' or 'pearson'). Default is 'spearman'.
+    separate_conditions : bool, optional
+        If True, plots individual histograms per condition. Default is False.
     """
     sample_map = metadata_df.set_index(sample_col)[cond_col]
     common_samples = norm_counts_df.columns.intersection(sample_map.index)
@@ -636,8 +671,18 @@ def plot_expr_vs_libsize_correlation(
 
 def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
     """
-    Plots the inferred biological variance (v_g) against mean log2 expression.
-    Highlights how the algorithm treats lowly vs. highly expressed genes.
+    Plots the inferred biological variance (v_g) against mean log2 expression (Sanity diagnostics).
+    
+    Parameters
+    ----------
+    means_df : pd.DataFrame
+        Estimated mean log2 expression level per condition.
+    vg_df : pd.DataFrame
+        Inferred biological variance (v_g) for each gene.
+    savefig_path : str or pathlib.Path
+        Output file path.
+    true_vg : float, optional
+        Value to plot as a horizontal true reference line (for simulated data).
     """
     # Calculate approximate base expression across all conditions
     base_expr = means_df.mean(axis=1)

@@ -33,25 +33,24 @@ def apply_deseq2_normalization(
     Parameters
     ----------
     counts_df : pd.DataFrame
-        Raw count matrix (genes x samples). May contain any additional columns.
+        Raw count matrix (genes x samples). May contain additional annotation columns.
     metadata_df : pd.DataFrame
         Metadata mapping samples to biological conditions.
     sample_col : str, optional
         Column name in metadata_df containing sample IDs. Default is 'sample'.
     cond_col : str, optional
         Column name in metadata_df containing condition labels. Default is 'condition'.
-        (Provided for API consistency, though size factors are computed globally).
-    lowExprGenesQ: float, optional
-        The quantile specifying the threshold to discard low-expressed genes 
+    lowExprGenesQ : float, optional
+        Quantile specifying the threshold to discard low-expressed genes 
         for size factor calculation. Default is 0.3.
-    pseudocount: float, optional
+    pseudocount : float, optional
         Added count before dividing by size factor value. Essential if further 
-        log2 transformation is performed. Default is 1.
+        log transformation is performed. Default is 1.
         
     Returns
     -------
     norm_counts_df : pd.DataFrame
-        Dataframe of normalized counts.
+        Dataframe of normalized counts (same shape as samples in metadata_df).
     sfs_df : pd.DataFrame
         Dataframe containing calculated size factors and read sums.
     """
@@ -180,8 +179,28 @@ def model_mean_variance(
     outlier_q=0.9,
     max_iter_QuantReg=1000):
     """
-    Estimates the mean-variance relationship within every condition individually
-    to account for condition-specific between-replicate variability.
+    Estimates the mean-variance relationship using Quantile Regression.
+    Useful for Negative Binomial / DESeq2 normalized counts.
+    
+    Parameters
+    ----------
+    norm_counts_df : pd.DataFrame
+        Normalized count matrix.
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to biological conditions.
+    sample_col : str, optional
+        Sample column name. Default is 'sample'.
+    cond_col : str, optional
+        Condition column name. Default is 'condition'.
+    outlier_q : float, optional
+        Quantile used to filter extreme outliers before model fitting. Default is 0.9.
+        
+    Returns
+    -------
+    RegrModel_df : pd.DataFrame
+        DataFrame containing the fitted dispersion (alpha) parameter per condition.
+    all_plot_data : pd.DataFrame
+        DataFrame containing the mean, variance, and predicted variance for diagnostics.
     """
     sample_map = metadata_df.set_index(sample_col)[cond_col]
     common_samples = norm_counts_df.columns.intersection(sample_map.index)
@@ -245,9 +264,7 @@ def model_mean_variance(
 
 # --- TOP-LEVEL MULTIPROCESSING WORKERS ---
 def _sanity_pass1_worker(args):
-    """Worker function for the first pass (calculating raw MAP variance)."""
     i, n_g, exp_n_g, n_samples = args
-    
     def get_deltas(v):
         d = np.zeros(n_samples)
         for j in range(n_samples):
@@ -277,9 +294,7 @@ def _sanity_pass1_worker(args):
     return i, res.x[0]
 
 def _sanity_pass3_worker(args):
-    """Worker function for the final pass (recalculating posteriors)."""
     i, n_g, exp_n_g, n_samples, v_optimal = args
-    
     d = np.zeros(n_samples)
     for j in range(n_samples):
         current_d = np.log(max(n_g[j], 1e-2) / exp_n_g[j]) if n_g[j] > 0 else 0.0
@@ -291,16 +306,41 @@ def _sanity_pass3_worker(args):
             current_d -= step
             if abs(step) < 1e-5: break
         d[j] = current_d
-        
     opt_vars = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v_optimal)
     return i, d, opt_vars
 
-# --- CORE FUNCTIONS ---
 def apply_sanity_normalization(
     counts_df, metadata_df, sample_col='sample', cond_col='condition', 
     empirical_bayes=True, n_cores=None):
     """
     Applies parallelized Sanity Bayesian normalization to RNA-seq counts.
+    
+    Parameters
+    ----------
+    counts_df : pd.DataFrame
+        Raw count matrix (genes x samples).
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to biological conditions.
+    sample_col : str, optional
+        Column name in metadata_df containing sample IDs. Default is 'sample'.
+    cond_col : str, optional
+        Column name in metadata_df containing condition labels. Default is 'condition'.
+    empirical_bayes : bool, optional
+        If True, applies LOWESS variance shrinkage and Chi-squared corrections to 
+        adjust for small sample sizes. If False, uses raw MAP estimates. Default is True.
+    n_cores : int, optional
+        Number of CPU cores for parallelization. Defaults to all available minus 1.
+        
+    Returns
+    -------
+    sample_norm_counts_df : pd.DataFrame
+        Sample-level normalized gene expression counts (scaled to median library size, log2 scale).
+    means_df : pd.DataFrame
+        Estimated mean log2 expression level per condition.
+    errors_df : pd.DataFrame
+        Estimated standard errors of the mean log2 expression level per condition.
+    vg_df : pd.DataFrame
+        Inferred biological variance (v_g) for each gene (both robust and raw).
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -322,7 +362,6 @@ def apply_sanity_normalization(
     alpha_g = counts.sum(axis=1) / total_counts 
     expected_n = np.outer(alpha_g, N_c)
     
-    # Define CPU cores
     if n_cores is None:
         n_cores = max(1, mp.cpu_count() - 1)
         
@@ -337,33 +376,22 @@ def apply_sanity_normalization(
 
     if empirical_bayes:
         print("PASS 2: Applying Empirical Bayes Variance Shrinkage (LOWESS)...")
-
-        # We use log10(expr) for the x-axis to evenly space out the low-expression genes
         df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
         df_trend = df_trend.sort_values('expr')
-
-        # 1. Fit a robust LOWESS curve (frac=0.1 means it uses a 10% sliding window)
-        # This prevents the "zero-pile" from completely flattening the trend
-        trend = sm.nonparametric.lowess(
-            endog=df_trend['v_g'], 
-            exog=df_trend['expr'], 
-            frac=0.1, 
-            return_sorted=False
-        )
-
-        # 2. Establish a strict Biological Floor
-        # We find the 5th percentile of genes that actually have detectable variance
+        
+        # LOWESS regression to establish a robust variance trend
+        trend = sm.nonparametric.lowess(endog=df_trend['v_g'], exog=df_trend['expr'], frac=0.1, return_sorted=False)
+        
+        # Biological Floor to prevent zero-variance crashing for lowly expressed genes
         valid_v_g = raw_v_g[raw_v_g > 1.1e-4]
         min_floor = valid_v_g.quantile(0.05) if len(valid_v_g) > 0 else 1e-3
-
-        # Clip the LOWESS trend so it never drops below the biological floor
         df_trend['trended_v_g'] = np.clip(trend, a_min=min_floor, a_max=None)
-
-        # 3. Apply the exact Chi-Squared small-sample correction
+        
+        # Chi-Squared small-sample bias correction
         df = max(1, n_samples - 1)
         chi2_median = stats.chi2.ppf(0.5, df)
         correction_factor = n_samples / chi2_median
-
+        
         df_trend['robust_v_g'] = df_trend['trended_v_g'] * correction_factor
         df_trend = df_trend.sort_index()
         final_v_g = df_trend['robust_v_g'].values
@@ -377,7 +405,6 @@ def apply_sanity_normalization(
         pass3_results = pool.map(_sanity_pass3_worker, pass3_args)
         
     pass3_results.sort(key=lambda x: x[0])
-    
     deltas = np.array([x[1] for x in pass3_results])
     variances = np.array([x[2] for x in pass3_results])
 
@@ -399,7 +426,6 @@ def apply_sanity_normalization(
         n_reps = len(idx)
         
         cond_means[cond] = log2_base_expr + np.mean(deltas_log2[:, idx], axis=1)
-        
         empirical_var = np.var(deltas_log2[:, idx], axis=1, ddof=1) if n_reps > 1 else 0
         posterior_var = np.mean(variances_log2[:, idx], axis=1) 
         cond_errors[cond] = np.sqrt((empirical_var + posterior_var) / n_reps)
@@ -411,23 +437,24 @@ def apply_sanity_normalization(
     print("Sanity normalization complete.")
     return sample_norm_counts_df, means_df, errors_df, vg_df
 
-
 def test_differential_expression(means_df, errors_df, cond_A, cond_B):
     """
     Performs a Bayesian Wald test for differential expression between two conditions 
     using Sanity's posterior means and standard errors.
     
-    Parameters:
-    -----------
+    Parameters
+    ----------
     means_df : pd.DataFrame
-        Estimated mean log2 expression level per condition.
+        Estimated mean log2 expression level per condition (output from Sanity).
     errors_df : pd.DataFrame
-        Estimated standard errors per condition.
-    cond_A, cond_B : str
-        Names of the two conditions to compare (A vs B).
+        Estimated standard errors per condition (output from Sanity).
+    cond_A : str
+        Name of the primary condition (Numerator).
+    cond_B : str
+        Name of the reference condition (Denominator).
         
-    Returns:
-    --------
+    Returns
+    -------
     res_df : pd.DataFrame
         DataFrame containing log2FC (A - B), standard error, Z-score, p-value, and FDR.
     """
