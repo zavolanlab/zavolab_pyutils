@@ -18,7 +18,7 @@ from .read_count_data_analysis import get_MultiDimR2
 # Diagnostic plots
 ###
 
-def plot_size_factors(sfs_df, outdir, log_scale=False):
+def plot_size_factors(sfs_df, savefig_path, log_scale=False):
     """
     Plots the diagnostic relationship between library sizes and DESeq2 size factors.
 
@@ -31,8 +31,8 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
     sfs_df : pandas.DataFrame
         DataFrame containing size factors and read sums. Must include the 
         columns 'sf' (size factor) and 'read_sum_mln' (millions of reads).
-    outdir : str or pathlib.Path
-        Directory path where the generated plots (.png and .pdf) will be saved.
+    savefig_path : str or pathlib.Path
+        Output path where the generated plot will be saved.
     log_scale : bool, optional
         If True, applies a log2 transformation to both axes. A small pseudocount 
         is added to read sums to prevent log(0). Default is False.
@@ -40,7 +40,7 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
     Returns
     -------
     None
-        Saves 'library_size_vs_SF.png' and 'library_size_vs_SF.pdf' to `outdir`.
+        Saves the plot to `savefig_path`.
     """
     data = sfs_df.copy()
     if log_scale:
@@ -76,21 +76,19 @@ def plot_size_factors(sfs_df, outdir, log_scale=False):
     
     ax.set(xlabel=xlabel,
            ylabel=ylabel,
-          title="spearman corr = "+str(np.round(spearman_corr,2)))
+           title="spearman corr = "+str(np.round(spearman_corr,2)))
     ax.tick_params(left=True, bottom=True)
     
-    if outdir:
+    if savefig_path:
         try:
-            os.makedirs(outdir, exist_ok=True)
+            # Create parent directories if they do not exist
+            dir_path = Path(savefig_path).parent
+            dir_path.mkdir(parents=True, exist_ok=True)
+            
             fig.savefig(
-                os.path.join(outdir, "library_size_vs_SF.png"),
+                savefig_path,
                 bbox_inches="tight",
                 dpi=600
-            )
-            fig.savefig(
-                os.path.join(outdir, "library_size_vs_SF.pdf"),
-                bbox_inches="tight",
-                dpi=600,
             )
         except Exception as e:
             print(f"Error saving plot: {e}")
@@ -462,6 +460,12 @@ def plot_mean_vs_cv(
     Systematic correlations between CVs and the mean of normalized expression 
     levels reflect to what extent a normalization method has failed to correct 
     for Poisson sampling noise. Ideally, the correlation should be near zero.
+    
+    Returns
+    -------
+    plot_data_df : pd.DataFrame
+        A long-format DataFrame containing the 'gene', 'condition', 
+        'log2_mean', and 'log10_cv' for each data point plotted.
     """
     sample_map = metadata_df.set_index(sample_col)[cond_col]
     common_samples = norm_counts_df.columns.intersection(sample_map.index)
@@ -475,6 +479,8 @@ def plot_mean_vs_cv(
     fig, axes = plt.subplots(1, len(conditions), figsize=(5 * len(conditions), 5))
     if len(conditions) == 1: axes = [axes]
         
+    plot_data_list = [] # List to collect the dataframes for each condition
+        
     for i, cond in enumerate(conditions):
         samples_in_cond = sample_map[sample_map == cond].index
         if len(samples_in_cond) < 2: continue
@@ -487,26 +493,44 @@ def plot_mean_vs_cv(
         mask = means > 0
         means, stds = means[mask], stds[mask]
         cvs = stds / means
+        valid_genes = df_work.index[mask] # Capture the gene names that survived the filter
         
-        # Calculate correlations on log10 values to prevent skewing by extreme outliers
-        log_means = np.log10(means + 1e-6)
+        # Calculate correlations on log2 values to prevent skewing by extreme outliers
+        log2_means = np.log2(means + 1e-6)
         log_cvs = np.log10(cvs + 1e-6)
         
-        pearson_r, _ = stats.pearsonr(log_means, log_cvs)
-        spearman_r, _ = stats.spearmanr(means, cvs)
+        pearson_r, _ = stats.pearsonr(log2_means, log_cvs)
+        spearman_r, _ = stats.spearmanr(log2_means, log_cvs)
+        
+        # Store data for this condition
+        cond_df = pd.DataFrame({
+            'gene': valid_genes,
+            'condition': cond,
+            'log2_mean': log2_means,
+            'log10_cv': log_cvs
+        })
+        plot_data_list.append(cond_df)
         
         ax = axes[i]
-        sns.scatterplot(x=means, y=cvs, ax=ax, s=5, alpha=0.3, color='teal')
-        ax.set(
-            xscale='log', yscale='log', 
-            xlabel='Mean Expression', ylabel='Coefficient of Variation (CV)',
+        sns.scatterplot(x=log2_means, y=log_cvs, ax=ax, s=5, alpha=0.3, color='teal')
+        ax.set( 
+            xlabel='Mean $log_2$ Expression', ylabel='Coefficient of Variation (CV), $log_{10}$',
             title=f"{cond}\nPearson: {pearson_r:.2f} | Spearman: {spearman_r:.2f}"
         )
+        ax.tick_params(left=True, bottom=True)
         
     fig.tight_layout()
     dir_path = Path(savefig_path).parent
     dir_path.mkdir(parents=True, exist_ok=True)
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+    
+    # Combine all condition dataframes into one and return
+    if plot_data_list:
+        final_df = pd.concat(plot_data_list, ignore_index=True)
+    else:
+        final_df = pd.DataFrame()
+        
+    return final_df
 
 def plot_sanity_gene_expression_with_ci(
     sample_norm_df, means_df, errors_df, metadata_df, selected_genes, 
@@ -637,6 +661,7 @@ def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
         xlabel="Mean Log2 Expression",
         ylabel="Inferred Biological Variance (v_g)"
     )
+    ax.tick_params(left=True, bottom=True)
     
     fig.tight_layout()
     dir_path = Path(savefig_path).parent

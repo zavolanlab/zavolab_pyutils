@@ -12,6 +12,7 @@ from sklearn.metrics.pairwise import pairwise_distances
 import multiprocessing as mp
 from scipy import stats
 from statsmodels.regression.quantile_regression import QuantReg
+import statsmodels.api as sm
 
 from scipy.optimize import minimize
 import warnings
@@ -25,8 +26,7 @@ def apply_deseq2_normalization(
     sample_col='sample', 
     cond_col='condition', 
     lowExprGenesQ=0.3, 
-    pseudocount=1
-):
+    pseudocount=1):
     """
     Performs DESeq2-style median-of-ratios normalization.
     
@@ -298,8 +298,7 @@ def _sanity_pass3_worker(args):
 # --- CORE FUNCTIONS ---
 def apply_sanity_normalization(
     counts_df, metadata_df, sample_col='sample', cond_col='condition', 
-    empirical_bayes=True, n_cores=None
-):
+    empirical_bayes=True, n_cores=None):
     """
     Applies parallelized Sanity Bayesian normalization to RNA-seq counts.
     """
@@ -337,17 +336,34 @@ def apply_sanity_normalization(
     raw_v_g = np.array([x[1] for x in pass1_results])
 
     if empirical_bayes:
-        print("PASS 2: Applying Empirical Bayes Variance Shrinkage...")
-        df_trend = pd.DataFrame({'expr': alpha_g, 'v_g': raw_v_g})
+        print("PASS 2: Applying Empirical Bayes Variance Shrinkage (LOWESS)...")
+
+        # We use log10(expr) for the x-axis to evenly space out the low-expression genes
+        df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
         df_trend = df_trend.sort_values('expr')
-        
-        window = max(50, n_genes // 20)
-        df_trend['trended_v_g'] = df_trend['v_g'].rolling(window=window, min_periods=1, center=True).median()
-        
+
+        # 1. Fit a robust LOWESS curve (frac=0.1 means it uses a 10% sliding window)
+        # This prevents the "zero-pile" from completely flattening the trend
+        trend = sm.nonparametric.lowess(
+            endog=df_trend['v_g'], 
+            exog=df_trend['expr'], 
+            frac=0.1, 
+            return_sorted=False
+        )
+
+        # 2. Establish a strict Biological Floor
+        # We find the 5th percentile of genes that actually have detectable variance
+        valid_v_g = raw_v_g[raw_v_g > 1.1e-4]
+        min_floor = valid_v_g.quantile(0.05) if len(valid_v_g) > 0 else 1e-3
+
+        # Clip the LOWESS trend so it never drops below the biological floor
+        df_trend['trended_v_g'] = np.clip(trend, a_min=min_floor, a_max=None)
+
+        # 3. Apply the exact Chi-Squared small-sample correction
         df = max(1, n_samples - 1)
         chi2_median = stats.chi2.ppf(0.5, df)
         correction_factor = n_samples / chi2_median
-        
+
         df_trend['robust_v_g'] = df_trend['trended_v_g'] * correction_factor
         df_trend = df_trend.sort_index()
         final_v_g = df_trend['robust_v_g'].values
