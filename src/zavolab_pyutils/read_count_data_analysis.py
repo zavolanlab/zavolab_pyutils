@@ -10,7 +10,10 @@ import numpy as np
 from scipy.spatial import distance
 from sklearn.metrics.pairwise import pairwise_distances
 import multiprocessing as mp
+
 from scipy import stats
+from scipy.interpolate import interp1d
+
 from statsmodels.regression.quantile_regression import QuantReg
 import statsmodels.api as sm
 
@@ -258,24 +261,94 @@ def model_mean_variance(
     
     return RegrModel_df, all_plot_data
 
+def get_deseq2_means_and_errors(norm_counts_df, metadata_df, regr_model_df, sample_col='sample', cond_col='condition'):
+    """
+    Calculates the mean expression and standard error for each condition 
+    based on DESeq2 normalized counts and the fitted Quantile Regression dispersion model.
+    
+    Parameters
+    ----------
+    norm_counts_df : pd.DataFrame
+        DESeq2 normalized count matrix.
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to biological conditions.
+    regr_model_df : pd.DataFrame
+        The output from `model_mean_variance` containing the fitted alpha per condition.
+    sample_col : str, optional
+        Sample column name. Default is 'sample'.
+    cond_col : str, optional
+        Condition column name. Default is 'condition'.
+        
+    Returns
+    -------
+    means_df : pd.DataFrame
+        Mean linear expression level per condition.
+    errors_df : pd.DataFrame
+        Standard Error of the Mean (SEM) per condition, derived from the Negative Binomial variance.
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    common_samples = norm_counts_df.columns.intersection(sample_map.index)
+    
+    df_work = norm_counts_df[common_samples].copy()
+    sample_map = sample_map[common_samples]
+    conditions = sample_map.unique()
+    
+    means_dict = {}
+    errors_dict = {}
+    
+    for cond in conditions:
+        samples_in_cond = sample_map[sample_map == cond].index
+        n_reps = len(samples_in_cond)
+        
+        # 1. Calculate the raw mean
+        cond_data = df_work[samples_in_cond].values
+        mu = np.mean(cond_data, axis=1)
+        means_dict[cond] = mu
+        
+        # 2. Retrieve the condition-specific dispersion (alpha)
+        alpha_row = regr_model_df[regr_model_df['condition'] == cond]
+        if not alpha_row.empty:
+            alpha = alpha_row['param'].values[0]
+        else:
+            print(f"Warning: No fitted alpha found for {cond}. Using empirical variance.")
+            alpha = None
+            
+        # 3. Calculate Variance and SEM
+        if alpha is not None:
+            # Negative Binomial modeled variance: V = mu + alpha * mu^2
+            var = mu + alpha * (mu ** 2)
+            var = np.maximum(var, 0) # Safety catch
+        else:
+            var = np.var(cond_data, axis=1, ddof=1)
+            
+        sem = np.sqrt(var / n_reps)
+        errors_dict[cond] = sem
+        
+    means_df = pd.DataFrame(means_dict, index=df_work.index)
+    errors_df = pd.DataFrame(errors_dict, index=df_work.index)
+    
+    return means_df, errors_df
+
+
+
 #####
 # Sanity Bayesian Normalization Implementation adapted from PMID: 33927416
 #####
 
 # --- TOP-LEVEL MULTIPROCESSING WORKERS ---
 def _sanity_pass1_worker(args):
-    i, n_g, exp_n_g, n_samples = args
+    i, n_g, exp_n_g, n_samples, min_variance = args
     def get_deltas(v):
         d = np.zeros(n_samples)
         for j in range(n_samples):
-            current_d = np.log(max(n_g[j], 1e-2) / exp_n_g[j]) if n_g[j] > 0 else 0.0
+            current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
             for _ in range(15):
                 exp_d = np.exp(current_d)
                 f = n_g[j] - exp_n_g[j] * exp_d - current_d / v
                 df = -exp_n_g[j] * exp_d - 1.0 / v
                 step = f / df
                 current_d -= step
-                if abs(step) < 1e-5: break
+                if abs(step) < min_variance: break
             d[j] = current_d
         return d
 
@@ -290,57 +363,34 @@ def _sanity_pass1_worker(args):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        res = minimize(neg_log_evidence, x0=[0.1], bounds=[(1e-4, 20.0)])
+        # Use dynamic lower bound
+        res = minimize(neg_log_evidence, x0=[0.1], bounds=[(min_variance, 20.0)])
     return i, res.x[0]
 
 def _sanity_pass3_worker(args):
-    i, n_g, exp_n_g, n_samples, v_optimal = args
+    i, n_g, exp_n_g, n_samples, v_optimal, min_variance = args
+    
+    # Safety catch: ensure v_optimal never mathematically hits pure zero due to float rounding
+    v_optimal = max(v_optimal, min_variance)
+    
     d = np.zeros(n_samples)
     for j in range(n_samples):
-        current_d = np.log(max(n_g[j], 1e-2) / exp_n_g[j]) if n_g[j] > 0 else 0.0
+        current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
         for _ in range(15):
             exp_d = np.exp(current_d)
             f = n_g[j] - exp_n_g[j] * exp_d - current_d / v_optimal
             df = -exp_n_g[j] * exp_d - 1.0 / v_optimal
             step = f / df
             current_d -= step
-            if abs(step) < 1e-5: break
+            if abs(step) < min_variance: break
         d[j] = current_d
+        
     opt_vars = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v_optimal)
     return i, d, opt_vars
 
-def apply_sanity_normalization(
-    counts_df, metadata_df, sample_col='sample', cond_col='condition', 
-    empirical_bayes=True, n_cores=None):
+def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond_col='condition', empirical_bayes=False, n_cores=None, min_variance=1e-12):
     """
     Applies parallelized Sanity Bayesian normalization to RNA-seq counts.
-    
-    Parameters
-    ----------
-    counts_df : pd.DataFrame
-        Raw count matrix (genes x samples).
-    metadata_df : pd.DataFrame
-        Metadata mapping samples to biological conditions.
-    sample_col : str, optional
-        Column name in metadata_df containing sample IDs. Default is 'sample'.
-    cond_col : str, optional
-        Column name in metadata_df containing condition labels. Default is 'condition'.
-    empirical_bayes : bool, optional
-        If True, applies LOWESS variance shrinkage and Chi-squared corrections to 
-        adjust for small sample sizes. If False, uses raw MAP estimates. Default is True.
-    n_cores : int, optional
-        Number of CPU cores for parallelization. Defaults to all available minus 1.
-        
-    Returns
-    -------
-    sample_norm_counts_df : pd.DataFrame
-        Sample-level normalized gene expression counts (scaled to median library size, log2 scale).
-    means_df : pd.DataFrame
-        Estimated mean log2 expression level per condition.
-    errors_df : pd.DataFrame
-        Estimated standard errors of the mean log2 expression level per condition.
-    vg_df : pd.DataFrame
-        Inferred biological variance (v_g) for each gene (both robust and raw).
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -366,7 +416,7 @@ def apply_sanity_normalization(
         n_cores = max(1, mp.cpu_count() - 1)
         
     print(f"PASS 1: Running Sanity inference on {n_genes} genes using {n_cores} cores...")
-    pass1_args = [(i, counts[i, :], expected_n[i, :], n_samples) for i in range(n_genes)]
+    pass1_args = [(i, counts[i, :], expected_n[i, :], n_samples, min_variance) for i in range(n_genes)]
     
     with mp.Pool(processes=n_cores) as pool:
         pass1_results = pool.map(_sanity_pass1_worker, pass1_args)
@@ -375,31 +425,48 @@ def apply_sanity_normalization(
     raw_v_g = np.array([x[1] for x in pass1_results])
 
     if empirical_bayes:
-        print("PASS 2: Applying Empirical Bayes Variance Shrinkage (LOWESS)...")
+        print("PASS 2: Applying Empirical Bayes Variance Shrinkage (Overdispersion-Only Fit)...")
         df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
         df_trend = df_trend.sort_values('expr')
         
-        # LOWESS regression to establish a robust variance trend
-        trend = sm.nonparametric.lowess(endog=df_trend['v_g'], exog=df_trend['expr'], frac=0.1, return_sorted=False)
+        # 1. Isolate ONLY the genes with clear biological overdispersion
+        # This prevents the underdispersed "Poisson" genes from dragging the curve down
+        mask_valid = df_trend['v_g'] > (min_variance * 100)
+        valid_expr = df_trend.loc[mask_valid, 'expr'].values
+        valid_vg = df_trend.loc[mask_valid, 'v_g'].values
         
-        # Biological Floor to prevent zero-variance crashing for lowly expressed genes
-        valid_v_g = raw_v_g[raw_v_g > 1.1e-4]
-        min_floor = valid_v_g.quantile(0.05) if len(valid_v_g) > 0 else 1e-3
-        df_trend['trended_v_g'] = np.clip(trend, a_min=min_floor, a_max=None)
+        if len(valid_vg) > np.quantile(valid_vg, 0.1):
+            # 2. Fit LOWESS only on the valid, overdispersed genes
+            trend = sm.nonparametric.lowess(endog=valid_vg, exog=valid_expr, frac=0.2, return_sorted=False)
+            
+            # 3. Interpolate the trend line back to ALL genes (rescuing the zeros)
+            interpolator = interp1d(valid_expr, trend, kind='linear', fill_value="extrapolate")
+            global_trend = interpolator(df_trend['expr'].values)
+        else:
+            global_trend = np.full(n_genes, np.median(valid_vg) if len(valid_vg) > 0 else 0.01)
         
-        # Chi-Squared small-sample bias correction
+        # 4. Establish a safe biological floor
+        min_floor = np.quantile(valid_vg, 0.05) if len(valid_vg) > 0 else 1e-3
+        df_trend['trended_v_g'] = np.clip(global_trend, a_min=min_floor, a_max=None)
+        
+        # 5. Chi-Squared small-sample bias correction
         df = max(1, n_samples - 1)
         chi2_median = stats.chi2.ppf(0.5, df)
         correction_factor = n_samples / chi2_median
         
         df_trend['robust_v_g'] = df_trend['trended_v_g'] * correction_factor
+        
+        # DESeq2 Strategy: Push underdispersed genes UP to the robust trend.
+        # Leave genes that are highly overdispersed alone (or pull them toward the trend).
+        # For Sanity, strictly using the smoothed trend for all genes ensures stable, 
+        # non-zero CVs and prevents extreme false positives in DE testing.
         df_trend = df_trend.sort_index()
         final_v_g = df_trend['robust_v_g'].values
     else:
         final_v_g = raw_v_g
         
     print("PASS 3: Finalizing Bayesian Posteriors...")
-    pass3_args = [(i, counts[i, :], expected_n[i, :], n_samples, final_v_g[i]) for i in range(n_genes)]
+    pass3_args = [(i, counts[i, :], expected_n[i, :], n_samples, final_v_g[i], min_variance) for i in range(n_genes)]
     
     with mp.Pool(processes=n_cores) as pool:
         pass3_results = pool.map(_sanity_pass3_worker, pass3_args)
