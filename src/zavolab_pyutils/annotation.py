@@ -24,7 +24,7 @@ def convert_gff_to_gtf(gff_file, gtf_file):
     the attribute column format and adjusting coordinate systems as needed.
     """
     # Placeholder implementation
-    pass
+    raise NotImplementedError("convert_gff_to_gtf is currently under development.")
 
 
 def convert_gtf_to_gff(gtf_file, gff_file):
@@ -48,7 +48,7 @@ def convert_gtf_to_gff(gtf_file, gff_file):
     the attribute column format.
     """
     # Placeholder implementation
-    pass
+    raise NotImplementedError("convert_gtf_to_gff is currently under development.")
 
 
 def parse_gtf_attributes(attribute_string):
@@ -66,4 +66,4 @@ def parse_gtf_attributes(attribute_string):
         Parsed attributes as key-value pairs.
     """
     # Placeholder implementation
-    return {}
+    raise NotImplementedError("parse_gtf_attributes is currently under development.")

@@ -485,8 +485,13 @@ def plot_sanity_gene_expression_with_ci(
         If True, applies a Bonferroni correction to the CI width based on the 
         number of pairwise condition comparisons. Default is False.
     """
-    common_genes = [g for g in selected_genes if g in sample_norm_df.index]
-    melted = sample_norm_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
+    
+    input_data_df = sample_norm_df.copy()
+    input_data_df.index.name = 'index'
+    
+    common_genes = [g for g in selected_genes if g in input_data_df.index]
+
+    melted = input_data_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
     melted = pd.melt(melted, id_vars=['gene_name'], var_name=sample_col, value_name='log2_expr')
     melted = pd.merge(metadata_df[[sample_col, cond_col]], melted, how='right', on=sample_col)
     
@@ -521,6 +526,7 @@ def plot_sanity_gene_expression_with_ci(
         )
         
         ax.set(title=gene, ylabel='', xlabel='$log_2~expr$')
+        ax.tick_params(left=True, bottom=True)
         if k > 0: ax.tick_params(left=False)
         
     Path(savefig_path).parent.mkdir(parents=True, exist_ok=True)

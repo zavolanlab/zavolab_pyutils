@@ -1,5 +1,7 @@
 # zavolab_pyutils
 
+![Tests](https://github.com/zavolanlab/zavolab_pyutils/actions/workflows/python-app.yml/badge.svg)
+
 Genomic data analysis utilities from the Zavolan Lab. A collection of Python utilities for common bioinformatics tasks including library size normalization, annotation conversion, and other genomic data analysis operations.
 
 ## Features
@@ -45,24 +47,30 @@ conda install -c bioconda zavolab_pyutils
 
 ```python
 import pandas as pd
-from zavolab_pyutils.read_count_data_analysis import deseq2_normalize
+from zavolab_pyutils.read_count_data_analysis import apply_deseq2_normalization
 
-# Create sample count matrix (genes × samples) as a DataFrame
-data = {
-    "Sample_1": [100, 50, 200],
-    "Sample_2": [200, 100, 400],
-    "Sample_3": [150, 80, 300],
-}
-counts_df = pd.DataFrame(data, index=["Gene_1", "Gene_2", "Gene_3"])
-
-# Normalize using DESeq2 method
-norm_counts_df, size_factors_df = deseq2_normalize(
-    counts_df, 
-    sample_list=["Sample_1", "Sample_2", "Sample_3"]
+# 1. Load your count matrix
+counts = pd.DataFrame(
+    [[100, 200, 150], [50, 100, 80]], 
+    columns=["S1", "S2", "S3"], 
+    index=["GeneA", "GeneB"]
 )
 
-print(norm_counts_df)
-print(size_factors_df)
+# 2. Define your sample metadata
+metadata = pd.DataFrame({
+    "sample": ["S1", "S2", "S3"],
+    "condition": ["Control", "Treatment", "Treatment"]
+})
+
+# 3. Apply DESeq2 median-of-ratios normalization
+norm_counts_df, size_factors_df = apply_deseq2_normalization(
+    counts_df=counts,
+    metadata_df=metadata,
+    sample_col="sample",
+    cond_col="condition"
+)
+print(norm_counts_df.head())
+print(size_factors_df.head())
 ```
 
 ### Mean-Variance Modeling and Confidence Intervals

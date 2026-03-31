@@ -17,19 +17,21 @@ from scipy.interpolate import interp1d
 from statsmodels.regression.quantile_regression import QuantReg
 import statsmodels.api as sm
 
-from scipy.optimize import minimize
+from scipy.optimize import minimize, OptimizeWarning
 import warnings
 
 from statsmodels.stats.multitest import multipletests
 
+from typing import Tuple
 
 def apply_deseq2_normalization(
-    counts_df, 
-    metadata_df, 
-    sample_col='sample', 
-    cond_col='condition', 
-    lowExprGenesQ=0.3, 
-    pseudocount=1):
+    counts_df: pd.DataFrame, 
+    metadata_df: pd.DataFrame, 
+    sample_col: str = 'sample', 
+    cond_col: str = 'condition', 
+    lowExprGenesQ: float = 0.3, 
+    pseudocount: float = 1
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Performs DESeq2-style median-of-ratios normalization.
     
@@ -342,7 +344,7 @@ def _sanity_pass1_worker(args):
         d = np.zeros(n_samples)
         for j in range(n_samples):
             current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
-            for _ in range(15):
+            for _ in range(30):
                 exp_d = np.exp(current_d)
                 f = n_g[j] - exp_n_g[j] * exp_d - current_d / v
                 df = -exp_n_g[j] * exp_d - 1.0 / v
@@ -362,7 +364,9 @@ def _sanity_pass1_worker(args):
         return np.sum(term1 + term2 + term3 + term4)
 
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        # Specifically target the math warnings generated during inference bounds
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        warnings.simplefilter("ignore", category=OptimizeWarning)        
         # Use dynamic lower bound
         res = minimize(neg_log_evidence, x0=[0.1], bounds=[(min_variance, 20.0)])
     return i, res.x[0]
@@ -376,7 +380,7 @@ def _sanity_pass3_worker(args):
     d = np.zeros(n_samples)
     for j in range(n_samples):
         current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
-        for _ in range(15):
+        for _ in range(30):
             exp_d = np.exp(current_d)
             f = n_g[j] - exp_n_g[j] * exp_d - current_d / v_optimal
             df = -exp_n_g[j] * exp_d - 1.0 / v_optimal
@@ -425,7 +429,7 @@ def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond
     raw_v_g = np.array([x[1] for x in pass1_results])
 
     if empirical_bayes:
-        print("PASS 2: Applying Empirical Bayes Variance Shrinkage (Overdispersion-Only Fit)...")
+        print("PASS 1.5: Applying Empirical Bayes Variance Shrinkage (Overdispersion-Only Fit)...")
         df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
         df_trend = df_trend.sort_values('expr')
         
@@ -465,7 +469,7 @@ def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond
     else:
         final_v_g = raw_v_g
         
-    print("PASS 3: Finalizing Bayesian Posteriors...")
+    print("PASS 2: Finalizing Bayesian Posteriors...")
     pass3_args = [(i, counts[i, :], expected_n[i, :], n_samples, final_v_g[i], min_variance) for i in range(n_genes)]
     
     with mp.Pool(processes=n_cores) as pool:
@@ -507,14 +511,14 @@ def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond
 def test_differential_expression(means_df, errors_df, cond_A, cond_B):
     """
     Performs a Bayesian Wald test for differential expression between two conditions 
-    using Sanity's posterior means and standard errors.
+    using estimated means and standard errors.
     
     Parameters
     ----------
     means_df : pd.DataFrame
-        Estimated mean log2 expression level per condition (output from Sanity).
+        Estimated mean log2 expression level per condition.
     errors_df : pd.DataFrame
-        Estimated standard errors per condition (output from Sanity).
+        Estimated standard errors per condition.
     cond_A : str
         Name of the primary condition (Numerator).
     cond_B : str
@@ -547,3 +551,160 @@ def test_differential_expression(means_df, errors_df, cond_A, cond_B):
     }, index=means_df.index)
     
     return res_df
+
+####
+# Note: The full Bayesian Sanity implementation is more computationally intensive than the original point-estimate version.
+# It integrates over a grid of variance values to compute marginalized posteriors
+####
+
+# --- FULL BAYESIAN MULTIPROCESSING WORKER ---
+def _sanity_full_bayesian_worker(args):
+    """
+    Computes the marginalized posteriors for a single gene across a fixed grid 
+    of variance values (v), matching the original C++ Sanity implementation.
+    """
+    i, n_g, exp_n_g, n_samples, v_grid = args
+    
+    numbin = len(v_grid)
+    log_liks = np.zeros(numbin)
+    deltas_grid = np.zeros((numbin, n_samples))
+    variances_grid = np.zeros((numbin, n_samples))
+    
+    for k, v in enumerate(v_grid):
+        # 1. Newton-Raphson to solve for cell-specific log-transcription quotients (deltas)
+        d = np.zeros(n_samples)
+        for j in range(n_samples):
+            current_d = np.log(max(n_g[j], 1e-12) / exp_n_g[j]) if n_g[j] > 0 else 0.0
+            for _ in range(15):
+                exp_d = np.exp(current_d)
+                f = n_g[j] - exp_n_g[j] * exp_d - current_d / v
+                df = -exp_n_g[j] * exp_d - 1.0 / v
+                step = f / df
+                current_d -= step
+                if abs(step) < 1e-8: break
+            d[j] = current_d
+            
+        deltas_grid[k, :] = d
+        
+        # 2. Compute log likelihood (Evidence) for this variance bin
+        # Includes the -0.5 * C * log(v) term from the Gaussian prior on delta
+        term1 = (d ** 2) / (2 * v)
+        term2 = -n_g * d
+        term3 = exp_n_g * np.exp(d)
+        term4 = 0.5 * np.log(1 + v * exp_n_g * np.exp(d))
+        
+        log_evidence = -np.sum(term1 + term2 + term3 + term4) - (0.5 * n_samples * np.log(v))
+        log_liks[k] = log_evidence
+        
+        # 3. Compute variance of deltas at this specific v
+        variances_grid[k, :] = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v)
+        
+    # 4. Convert log-likelihoods to normalized probabilities (avoiding underflow)
+    max_ll = np.max(log_liks)
+    probs = np.exp(log_liks - max_ll)
+    probs_sum = np.sum(probs)
+    if probs_sum > 0:
+        probs /= probs_sum
+    else:
+        probs = np.ones(numbin) / numbin # Fallback for flat likelihoods
+        
+    # 5. Marginalize deltas over the variance grid
+    expected_deltas = np.sum(probs[:, np.newaxis] * deltas_grid, axis=0)
+    
+    # 6. Law of Total Variance: Var(X) = E[Var(X|V)] + Var(E[X|V])
+    expected_vars = np.sum(probs[:, np.newaxis] * variances_grid, axis=0)
+    var_of_expectations = np.sum(probs[:, np.newaxis] * (deltas_grid - expected_deltas)**2, axis=0)
+    
+    final_variances = expected_vars + var_of_expectations
+    expected_v_g = np.sum(probs * v_grid)
+    
+    return i, expected_deltas, final_variances, expected_v_g
+
+
+def apply_sanity_normalization_full_bayesian(
+    counts_df: pd.DataFrame, 
+    metadata_df: pd.DataFrame, 
+    sample_col: str = 'sample', 
+    cond_col: str = 'condition', 
+    vmin: float = 0.001, 
+    vmax: float = 50.0, 
+    numbin: int = 160,
+    n_cores: int = None
+):
+    """
+    Applies the strict full Bayesian Sanity normalization to RNA-seq counts.
+    Integrates over a grid of variance values rather than relying on point-estimates 
+    or empirical Bayes shrinkage.
+    """
+    if metadata_df[sample_col].duplicated().any():
+        raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
+    
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    common_samples = counts_df.columns.intersection(sample_map.index)
+    counts = counts_df[common_samples].values
+    sample_map = sample_map[common_samples]
+    conditions = sample_map.unique()
+    
+    gene_sums = counts.sum(axis=1)
+    valid_mask = gene_sums > 0
+    counts = counts[valid_mask]
+    genes = counts_df.index[valid_mask]
+    n_genes, n_samples = counts.shape
+    
+    N_c = counts.sum(axis=0)
+    total_counts = N_c.sum()
+    alpha_g = counts.sum(axis=1) / total_counts 
+    expected_n = np.outer(alpha_g, N_c)
+    
+    if n_cores is None:
+        n_cores = max(1, mp.cpu_count() - 1)
+        
+    # Construct the log-spaced grid of variances (matching C++ Sanity)
+    deltav = np.log(vmax / vmin) / (numbin - 1)
+    v_grid = vmin * np.exp(deltav * np.arange(numbin))
+        
+    print(f"Running Full Bayesian Sanity inference on {n_genes} genes using {n_cores} cores...")
+    print(f"Integrating over {numbin} variance bins between {vmin} and {vmax}.")
+    
+    worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid) for i in range(n_genes)]
+    
+    with mp.Pool(processes=n_cores) as pool:
+        results = pool.map(_sanity_full_bayesian_worker, worker_args)
+        
+    # Sort results to maintain original index order
+    results.sort(key=lambda x: x[0])
+    deltas = np.array([x[1] for x in results])
+    variances = np.array([x[2] for x in results])
+    expected_v_g = np.array([x[3] for x in results])
+
+    ln2 = np.log(2)
+    deltas_log2 = deltas / ln2
+    variances_log2 = variances / (ln2**2)
+    
+    median_lib_size = np.median(N_c)
+    log2_base_expr = np.log2(alpha_g * median_lib_size + 1e-18)
+    
+    sample_log2_expr = log2_base_expr[:, np.newaxis] + deltas_log2
+    sample_norm_counts_df = pd.DataFrame(sample_log2_expr, index=genes, columns=common_samples)
+    
+    cond_means = {}
+    cond_errors = {}
+    
+    for cond in conditions:
+        idx = np.where(sample_map == cond)[0]
+        n_reps = len(idx)
+        
+        # Mean across biological replicates
+        cond_means[cond] = log2_base_expr + np.mean(deltas_log2[:, idx], axis=1)
+        
+        # Combine empirical variance and marginalized posterior variance
+        empirical_var = np.var(deltas_log2[:, idx], axis=1, ddof=1) if n_reps > 1 else 0
+        posterior_var = np.mean(variances_log2[:, idx], axis=1) 
+        cond_errors[cond] = np.sqrt((empirical_var + posterior_var) / n_reps)
+
+    means_df = pd.DataFrame(cond_means, index=genes)
+    errors_df = pd.DataFrame(cond_errors, index=genes)
+    vg_df = pd.DataFrame({'marginalized_v_g': expected_v_g}, index=genes)
+    
+    print("Full Bayesian Sanity normalization complete.")
+    return sample_norm_counts_df, means_df, errors_df, vg_df
