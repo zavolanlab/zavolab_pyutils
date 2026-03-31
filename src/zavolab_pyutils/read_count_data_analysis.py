@@ -562,8 +562,9 @@ def _sanity_full_bayesian_worker(args):
     """
     Computes the marginalized posteriors for a single gene across a fixed grid 
     of variance values (v), matching the original C++ Sanity implementation.
+    Optionally applies an Empirical Bayes Log-Normal prior derived from population trends.
     """
-    i, n_g, exp_n_g, n_samples, v_grid, min_variance = args
+    i, n_g, exp_n_g, n_samples, v_grid, min_variance, eb_prior_mean, eb_prior_var = args
     
     numbin = len(v_grid)
     log_liks = np.zeros(numbin)
@@ -587,21 +588,25 @@ def _sanity_full_bayesian_worker(args):
         deltas_grid[k, :] = d
         
         # 2. Compute log likelihood (Evidence) for this variance bin
-        # Note: The Gaussian prior volume penalty (-0.5*C*log(v)) perfectly cancels 
-        # out algebraically with a term in the Hessian determinant (term4). 
-        # Therefore we do NOT manually append it here!
         term1 = (d ** 2) / (2 * v)
         term2 = -n_g * d
         term3 = exp_n_g * np.exp(d)
         term4 = 0.5 * np.log(1 + v * exp_n_g * np.exp(d))
         
         log_evidence = -np.sum(term1 + term2 + term3 + term4)
+        
+        # 3. Apply Empirical Bayes Shrinkage Prior (if provided)
+        if eb_prior_mean is not None and eb_prior_var is not None:
+            # Log-Normal prior probability centered on the population trend
+            log_prior = -0.5 * ((np.log(v) - eb_prior_mean)**2 / eb_prior_var)
+            log_evidence += log_prior
+            
         log_liks[k] = log_evidence
         
-        # 3. Compute variance of deltas at this specific v
+        # 4. Compute variance of deltas at this specific v
         variances_grid[k, :] = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v)
         
-    # 4. Convert log-likelihoods to normalized probabilities (avoiding underflow)
+    # 5. Convert log-likelihoods to normalized probabilities (avoiding underflow)
     max_ll = np.max(log_liks)
     probs = np.exp(log_liks - max_ll)
     probs_sum = np.sum(probs)
@@ -610,10 +615,10 @@ def _sanity_full_bayesian_worker(args):
     else:
         probs = np.ones(numbin) / numbin # Fallback for flat likelihoods
         
-    # 5. Marginalize deltas over the variance grid
+    # 6. Marginalize deltas over the variance grid
     expected_deltas = np.sum(probs[:, np.newaxis] * deltas_grid, axis=0)
     
-    # 6. Law of Total Variance: Var(X) = E[Var(X|V)] + Var(E[X|V])
+    # 7. Law of Total Variance: Var(X) = E[Var(X|V)] + Var(E[X|V])
     expected_vars = np.sum(probs[:, np.newaxis] * variances_grid, axis=0)
     var_of_expectations = np.sum(probs[:, np.newaxis] * (deltas_grid - expected_deltas)**2, axis=0)
     
@@ -629,15 +634,18 @@ def apply_sanity_normalization_full_bayesian(
     metadata_df: pd.DataFrame, 
     sample_col: str = 'sample', 
     cond_col: str = 'condition', 
+    empirical_bayes: bool = False,
+    shrinkage_strength: float = 1.0,  # <-- NEW: Increase this to pull estimates tighter to the trend
     vmin: float = 0.001, 
     vmax: float = 50.0, 
     numbin: int = 160,
     min_variance: float = 1e-12,
-    n_cores: int = None
+    n_cores: int = None,
+    loess_variance_threshold_q: float = 0.1,
 ):
     """
     Applies the strict full Bayesian Sanity normalization to RNA-seq counts.
-    Should closely match the original C++ implementation.
+    Optionally applies Empirical Bayes shrinkage by deriving a prior from population trends.
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -665,16 +673,66 @@ def apply_sanity_normalization_full_bayesian(
     # Construct the log-spaced grid of variances (matching C++ Sanity)
     deltav = np.log(vmax / vmin) / (numbin - 1)
     v_grid = vmin * np.exp(deltav * np.arange(numbin))
-        
-    print(f"Running Full Bayesian Sanity inference on {n_genes} genes using {n_cores} cores...")
-    print(f"Integrating over {numbin} variance bins between {vmin} and {vmax}.")
     
-    # Pass min_variance to ensure the math doesn't fail on exactly zero counts
-    worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance) for i in range(n_genes)]
-    
-    with mp.Pool(processes=n_cores) as pool:
-        results = pool.map(_sanity_full_bayesian_worker, worker_args)
+    if empirical_bayes:
+        print(f"PASS 1: Running Initial Full Bayesian inference on {n_genes} genes to estimate variances...")
+        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
         
+        with mp.Pool(processes=n_cores) as pool:
+            pass1_results = pool.map(_sanity_full_bayesian_worker, worker_args)
+            
+        pass1_results.sort(key=lambda x: x[0])
+        # Use MAP estimates for the trend fitting
+        raw_v_g = np.array([x[4] for x in pass1_results]) 
+        
+        print("PASS 1.5: Applying Empirical Bayes Variance Shrinkage (Overdispersion-Only Fit)...")
+        df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
+        df_trend = df_trend.sort_values('expr')
+        
+        mask_valid = df_trend['v_g'] > df_trend['v_g'].quantile(loess_variance_threshold_q)
+        valid_expr = df_trend.loc[mask_valid, 'expr'].values
+        valid_vg = df_trend.loc[mask_valid, 'v_g'].values
+        
+        if len(valid_vg) > 10:
+            trend = sm.nonparametric.lowess(endog=valid_vg, exog=valid_expr, frac=0.2, return_sorted=False)
+            interpolator = interp1d(valid_expr, trend, kind='linear', fill_value="extrapolate")
+            global_trend = interpolator(df_trend['expr'].values)
+            
+            # Calculate the variance of residuals (spread around the trend) to set the width of the empirical prior
+            log_resids = np.log(valid_vg) - np.log(np.clip(trend, 1e-10, None))
+            prior_var = np.var(log_resids, ddof=1) if len(log_resids) > 1 else 1.0
+        else:
+            global_trend = np.full(n_genes, np.median(valid_vg) if len(valid_vg) > 0 else 0.01)
+            prior_var = 1.0
+            
+        min_floor = np.quantile(valid_vg, 0.05) if len(valid_vg) > 0 else 1e-3
+        df_trend['trended_v_g'] = np.clip(global_trend, a_min=min_floor, a_max=None)
+        
+        # Chi-Squared small-sample bias correction
+        df = max(1, n_samples - 1)
+        chi2_median = stats.chi2.ppf(0.5, df)
+        correction_factor = n_samples / chi2_median
+        
+        df_trend['robust_v_g'] = df_trend['trended_v_g'] * correction_factor
+        df_trend = df_trend.sort_index()
+        
+        eb_prior_means = np.log(df_trend['robust_v_g'].values)
+        eb_prior_var = max(prior_var / shrinkage_strength, 0.01)
+        
+        print("PASS 2: Finalizing Marginalized Posteriors with Empirical Prior...")
+        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, eb_prior_means[i], eb_prior_var) for i in range(n_genes)]
+        
+        with mp.Pool(processes=n_cores) as pool:
+            results = pool.map(_sanity_full_bayesian_worker, worker_args)
+            
+    else:
+        print(f"Running Full Bayesian Sanity inference on {n_genes} genes using {n_cores} cores...")
+        print(f"Integrating over {numbin} variance bins between {vmin} and {vmax}.")
+        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
+        
+        with mp.Pool(processes=n_cores) as pool:
+            results = pool.map(_sanity_full_bayesian_worker, worker_args)
+            
     # Sort results to maintain original index order
     results.sort(key=lambda x: x[0])
     deltas = np.array([x[1] for x in results])
@@ -709,10 +767,20 @@ def apply_sanity_normalization_full_bayesian(
 
     means_df = pd.DataFrame(cond_means, index=genes)
     errors_df = pd.DataFrame(cond_errors, index=genes)
-    vg_df = pd.DataFrame({
-        'marginalized_v_g': expected_v_g, 
-        'MAP_v_g': max_v_g
-    }, index=genes)
+    
+    # Structure the variance dataframe based on what was run
+    if empirical_bayes:
+        vg_df = pd.DataFrame({
+            'raw_MAP_v_g': raw_v_g,
+            'trended_prior_v_g': df_trend['robust_v_g'].values,
+            'marginalized_v_g': expected_v_g, 
+            'MAP_v_g': max_v_g
+        }, index=genes)
+    else:
+        vg_df = pd.DataFrame({
+            'marginalized_v_g': expected_v_g, 
+            'MAP_v_g': max_v_g
+        }, index=genes)
     
     print("Full Bayesian Sanity normalization complete.")
     return sample_norm_counts_df, means_df, errors_df, vg_df, median_lib_size
