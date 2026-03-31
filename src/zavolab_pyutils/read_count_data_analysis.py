@@ -563,7 +563,7 @@ def _sanity_full_bayesian_worker(args):
     Computes the marginalized posteriors for a single gene across a fixed grid 
     of variance values (v), matching the original C++ Sanity implementation.
     """
-    i, n_g, exp_n_g, n_samples, v_grid = args
+    i, n_g, exp_n_g, n_samples, v_grid, min_variance = args
     
     numbin = len(v_grid)
     log_liks = np.zeros(numbin)
@@ -574,26 +574,28 @@ def _sanity_full_bayesian_worker(args):
         # 1. Newton-Raphson to solve for cell-specific log-transcription quotients (deltas)
         d = np.zeros(n_samples)
         for j in range(n_samples):
-            current_d = np.log(max(n_g[j], 1e-12) / exp_n_g[j]) if n_g[j] > 0 else 0.0
-            for _ in range(15):
+            current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
+            for _ in range(30):
                 exp_d = np.exp(current_d)
                 f = n_g[j] - exp_n_g[j] * exp_d - current_d / v
                 df = -exp_n_g[j] * exp_d - 1.0 / v
                 step = f / df
                 current_d -= step
-                if abs(step) < 1e-8: break
+                if abs(step) < min_variance: break
             d[j] = current_d
             
         deltas_grid[k, :] = d
         
         # 2. Compute log likelihood (Evidence) for this variance bin
-        # Includes the -0.5 * C * log(v) term from the Gaussian prior on delta
+        # Note: The Gaussian prior volume penalty (-0.5*C*log(v)) perfectly cancels 
+        # out algebraically with a term in the Hessian determinant (term4). 
+        # Therefore we do NOT manually append it here!
         term1 = (d ** 2) / (2 * v)
         term2 = -n_g * d
         term3 = exp_n_g * np.exp(d)
         term4 = 0.5 * np.log(1 + v * exp_n_g * np.exp(d))
         
-        log_evidence = -np.sum(term1 + term2 + term3 + term4) - (0.5 * n_samples * np.log(v))
+        log_evidence = -np.sum(term1 + term2 + term3 + term4)
         log_liks[k] = log_evidence
         
         # 3. Compute variance of deltas at this specific v
@@ -617,8 +619,9 @@ def _sanity_full_bayesian_worker(args):
     
     final_variances = expected_vars + var_of_expectations
     expected_v_g = np.sum(probs * v_grid)
-    
-    return i, expected_deltas, final_variances, expected_v_g
+    max_lik_v_g = v_grid[np.argmax(probs)]
+
+    return i, expected_deltas, final_variances, expected_v_g, max_lik_v_g
 
 
 def apply_sanity_normalization_full_bayesian(
@@ -629,12 +632,12 @@ def apply_sanity_normalization_full_bayesian(
     vmin: float = 0.001, 
     vmax: float = 50.0, 
     numbin: int = 160,
+    min_variance: float = 1e-12,
     n_cores: int = None
 ):
     """
     Applies the strict full Bayesian Sanity normalization to RNA-seq counts.
-    Integrates over a grid of variance values rather than relying on point-estimates 
-    or empirical Bayes shrinkage.
+    Should closely match the original C++ implementation.
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -666,7 +669,8 @@ def apply_sanity_normalization_full_bayesian(
     print(f"Running Full Bayesian Sanity inference on {n_genes} genes using {n_cores} cores...")
     print(f"Integrating over {numbin} variance bins between {vmin} and {vmax}.")
     
-    worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid) for i in range(n_genes)]
+    # Pass min_variance to ensure the math doesn't fail on exactly zero counts
+    worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance) for i in range(n_genes)]
     
     with mp.Pool(processes=n_cores) as pool:
         results = pool.map(_sanity_full_bayesian_worker, worker_args)
@@ -676,6 +680,7 @@ def apply_sanity_normalization_full_bayesian(
     deltas = np.array([x[1] for x in results])
     variances = np.array([x[2] for x in results])
     expected_v_g = np.array([x[3] for x in results])
+    max_v_g = np.array([x[4] for x in results])
 
     ln2 = np.log(2)
     deltas_log2 = deltas / ln2
@@ -704,7 +709,10 @@ def apply_sanity_normalization_full_bayesian(
 
     means_df = pd.DataFrame(cond_means, index=genes)
     errors_df = pd.DataFrame(cond_errors, index=genes)
-    vg_df = pd.DataFrame({'marginalized_v_g': expected_v_g}, index=genes)
+    vg_df = pd.DataFrame({
+        'marginalized_v_g': expected_v_g, 
+        'MAP_v_g': max_v_g
+    }, index=genes)
     
     print("Full Bayesian Sanity normalization complete.")
-    return sample_norm_counts_df, means_df, errors_df, vg_df
+    return sample_norm_counts_df, means_df, errors_df, vg_df, median_lib_size
