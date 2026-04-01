@@ -6,9 +6,11 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 
 ## Features
 
-- **Library Size Normalization**: Deseq2-like normalization, Sanity normalization [PMID: 33927416](https://pubmed.ncbi.nlm.nih.gov/33927416/)
+- **Library Size Normalization**: [Deseq2-like](https://pubmed.ncbi.nlm.nih.gov/25516281/) normalization, [Sanity-like](https://pubmed.ncbi.nlm.nih.gov/33927416/) normalization, termed **pySanity**
 - **Mean-Variance Modeling**: Condition-specific overdispersion estimation for RNA-seq counts using Quantile Regression
-- **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on Sanity outputs or Quantile regression
+- **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on pySanity outputs or Quantile regression
+- **Visualization of isoform relative usage levels across conditions for selected isoforms**: confidence interval plotting based on pySanity outputs
+- **Differential expression and differential usage analysis**: based on pySanity outputs
 - **Annotation Conversion**: Convert between GTF and GFF3 formats (**TO DO**)
 - **Genomic Data Processing**: Utilities for working with genomic annotation files (**TO DO**)
 
