@@ -6,11 +6,11 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 
 ## Features
 
-- **Library Size Normalization**: Deseq2-like normalization
+- **Library Size Normalization**: Deseq2-like normalization, Sanity normalization [PMID: 33927416](https://pubmed.ncbi.nlm.nih.gov/33927416/)
 - **Mean-Variance Modeling**: Condition-specific overdispersion estimation for RNA-seq counts using Quantile Regression
-- **Visualization of expression levels across conditions for selected genes**: Empirical Bayes confidence interval plotting using the Negative Binomial distribution
-- **Annotation Conversion**: Convert between GTF and GFF3 formats
-- **Genomic Data Processing**: Utilities for working with genomic annotation files
+- **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on Sanity outputs or Quantile regression
+- **Annotation Conversion**: Convert between GTF and GFF3 formats (**TO DO**)
+- **Genomic Data Processing**: Utilities for working with genomic annotation files (**TO DO**)
 
 ## Installation
 
@@ -41,75 +41,17 @@ pip install zavolab_pyutils
 conda install -c bioconda zavolab_pyutils
 ```
 
-## Quick Start
-
-### Library Size Normalization
-
-```python
-import pandas as pd
-from zavolab_pyutils.read_count_data_analysis import apply_deseq2_normalization
-
-# 1. Load your count matrix
-counts = pd.DataFrame(
-    [[100, 200, 150], [50, 100, 80]], 
-    columns=["S1", "S2", "S3"], 
-    index=["GeneA", "GeneB"]
-)
-
-# 2. Define your sample metadata
-metadata = pd.DataFrame({
-    "sample": ["S1", "S2", "S3"],
-    "condition": ["Control", "Treatment", "Treatment"]
-})
-
-# 3. Apply DESeq2 median-of-ratios normalization
-norm_counts_df, size_factors_df = apply_deseq2_normalization(
-    counts_df=counts,
-    metadata_df=metadata,
-    sample_col="sample",
-    cond_col="condition"
-)
-print(norm_counts_df.head())
-print(size_factors_df.head())
-```
-
-### Mean-Variance Modeling and Confidence Intervals
-
-```python
-from zavolab_pyutils.read_count_data_analysis import model_mean_variance
-from zavolab_pyutils.visualization import plot_gene_expression_with_ci
-
-# 1. Define your sample metadata
-metadata_df = pd.DataFrame({
-    "sample": ["Sample_1", "Sample_2", "Sample_3"],
-    "condition": ["Control", "Control", "Treatment"]
-})
-
-# 2. Model the condition-specific dispersion (alpha) using Quantile Regression
-regr_model_df, plot_data = model_mean_variance(
-    norm_counts_df, 
-    metadata_df, 
-    sample_col='sample', 
-    cond_col='condition'
-)
-
-# 3. Plot specific genes with Negative Binomial Confidence Intervals
-plot_gene_expression_with_ci(
-    norm_counts_df, 
-    metadata_df, 
-    selected_genes=["Gene_1", "Gene_2"], 
-    regr_model_df=regr_model_df, 
-    savefig_path='./gene_expression_plot.png'
-)
-```
-
 ## Documentation and examples of usage
 
-For a examples and testing, use [test_module.ipynb](test_module.ipynb).
+For various examples of usage and testing, use [test_module.ipynb](test_module.ipynb).
 Use AI to ask about the functionality. See the example with Gemini in [docs](docs/).
 For further detailed documentation, see the [docs](docs/) directory. **TO DO**
 
-## Testing **TO DO**
+## Testing
+
+For various examples of usage and testing, run [test_module.ipynb](test_module.ipynb).
+
+Automatic tests are implemented in [CI workflow](.github/workflows/python-app.yml)
 
 ## Contributing
 

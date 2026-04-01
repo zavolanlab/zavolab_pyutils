@@ -13,3 +13,5 @@ Alternatively, and powerfully, use AI:
 
 ![Gemini example, screenshot 1](./images/Gemini_documentation_1.png)
 ![Gemini example, screenshot 2](./images/Gemini_documentation_2.png)
+![Gemini example, screenshot 3](./images/Gemini_documentation_3.png)
+![Gemini example, screenshot 4](./images/Gemini_documentation_4.png)
