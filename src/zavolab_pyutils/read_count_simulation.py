@@ -144,3 +144,168 @@ def simulate_poisson_lognormal_counts(
         
     counts_df = pd.DataFrame(counts_dict, index=samples, columns=genes).transpose()
     return counts_df, metadata_df, scaling_factors
+
+def simulate_isoform_poisson_lognormal_counts(
+    N_genes=3000, conditions=["Control", "Treatment"], 
+    n_replicates=3, v_log_gene=0.05, v_log_iso=0.02, seed=42, 
+    SF_sigma=0.3, exp_average_M=3, exp_average_S=2, frac_diff_usage=0.1,
+    lambda_iso=1.5, shift_logfc_mean=0.0, shift_logfc_sd=1.0
+):
+    """
+    Simulates isoform counts using a Poisson-LogNormal mixture.
+    Samples the number of isoforms per gene from a Poisson distribution.
+    Applies differential usage via a Normal-sampled log-fold change.
+    Returns the isoform_to_gene mapping required for downstream Log-Odds Sanity testing.
+    """
+    samples, metadata_df, scaling_factors = _generate_metadata_and_factors(conditions, n_replicates, SF_sigma, seed)
+    
+    np.random.seed(seed)
+    exp_average_vals = np.random.lognormal(exp_average_M, exp_average_S, N_genes)
+    genes = [f"Gene_{i}" for i in range(1, N_genes+1)]
+    
+    # Determine which genes will have differential relative usage
+    n_diff = int(N_genes * frac_diff_usage)
+    diff_genes = set(np.random.choice(genes, n_diff, replace=False))
+    
+    iso_counts_dict = {}
+    isoform_to_gene = {}
+    
+    sigma_gene = np.sqrt(v_log_gene)
+    sigma_iso = np.sqrt(v_log_iso)
+    
+    for k, gene in enumerate(genes):
+        mu_gene = exp_average_vals[k]
+        
+        # 1. Sample number of isoforms (minimum 1)
+        n_iso = max(1, np.random.poisson(lambda_iso))
+        iso_names = [f"{gene}_Iso{i+1}" for i in range(n_iso)]
+        
+        # Map isoforms to their parent gene
+        for iso in iso_names:
+            isoform_to_gene[iso] = gene
+            
+        if n_iso == 1 and gene in diff_genes:
+            diff_genes.remove(gene) # Cannot have diff usage with 1 isoform
+            
+        # 2. Baseline Dirichlet proportions
+        pi_base = np.random.dirichlet(np.ones(n_iso)) if n_iso > 1 else np.array([1.0])
+        
+        # 3. Shift proportions for Condition 2
+        if gene in diff_genes:
+            # Draw log-fold changes for each isoform
+            log_fc = np.random.normal(shift_logfc_mean, shift_logfc_sd, size=n_iso)
+            
+            # Apply fold change multiplicatively to the proportions and re-normalize
+            pi_cond2_unnorm = pi_base * np.exp(log_fc)
+            pi_cond2 = pi_cond2_unnorm / np.sum(pi_cond2_unnorm)
+        else:
+            pi_cond2 = pi_base
+            
+        sample_iso_counts = {iso: [] for iso in iso_names}
+        
+        for s, sample in enumerate(samples):
+            cond = metadata_df.loc[s, 'condition']
+            pi_current = pi_cond2 if cond == conditions[1] else pi_base
+            
+            # Gene-level biological Noise (affects all isoforms equally)
+            delta_g = np.random.normal(0, sigma_gene)
+            
+            for i, iso in enumerate(iso_names):
+                # Isoform-level biological Noise (splicing/cleavage variance)
+                delta_iso = np.random.normal(0, sigma_iso)
+                
+                # True Rate
+                base_rate = mu_gene * pi_current[i] * scaling_factors[s] * np.exp(delta_g + delta_iso)
+                
+                # Final count drawn from Poisson
+                count = np.random.poisson(base_rate)
+                sample_iso_counts[iso].append(count)
+                
+        for iso in iso_names:
+            iso_counts_dict[iso] = sample_iso_counts[iso]
+            
+    iso_counts_df = pd.DataFrame(iso_counts_dict, index=samples).transpose()
+    
+    return iso_counts_df, metadata_df, isoform_to_gene, diff_genes
+
+
+def simulate_isoform_negative_binomial_counts(
+    N_genes=3000, conditions=["Control", "Treatment"], 
+    n_replicates=3, alpha_gene=0.05, alpha_iso=0.02, seed=42, 
+    SF_sigma=0.3, exp_average_M=3, exp_average_S=2, frac_diff_usage=0.1,
+    lambda_iso=1.5, shift_logfc_mean=0.0, shift_logfc_sd=1.0
+):
+    """
+    Simulates isoform counts using a Negative Binomial mixture.
+    Returns the isoform_to_gene mapping required for downstream Log-Odds Sanity testing.
+    """
+    samples, metadata_df, scaling_factors = _generate_metadata_and_factors(conditions, n_replicates, SF_sigma, seed)
+    
+    np.random.seed(seed)
+    exp_average_vals = np.random.lognormal(exp_average_M, exp_average_S, N_genes)
+    genes = [f"Gene_{i}" for i in range(1, N_genes+1)]
+    
+    n_diff = int(N_genes * frac_diff_usage)
+    diff_genes = set(np.random.choice(genes, n_diff, replace=False))
+    
+    iso_counts_dict = {}
+    isoform_to_gene = {} # <-- NEW: Replaces isoform_pairs
+    
+    n_param_gene = 1 / alpha_gene if alpha_gene > 0 else 1e6
+    n_param_iso = 1 / alpha_iso if alpha_iso > 0 else 1e6
+    
+    for k, gene in enumerate(genes):
+        mu_gene = exp_average_vals[k]
+        
+        # 1. Sample number of isoforms
+        n_iso = max(1, np.random.poisson(lambda_iso))
+        iso_names = [f"{gene}_Iso{i+1}" for i in range(n_iso)]
+        
+        # Map isoforms to their parent gene
+        for iso in iso_names:
+            isoform_to_gene[iso] = gene
+            
+        if n_iso == 1 and gene in diff_genes:
+            diff_genes.remove(gene) # Cannot have diff usage with 1 isoform
+            
+        # 2. Baseline Dirichlet proportions
+        pi_base = np.random.dirichlet(np.ones(n_iso)) if n_iso > 1 else np.array([1.0])
+        
+        # 3. Shift proportions for Condition 2
+        if gene in diff_genes:
+            log_fc = np.random.normal(shift_logfc_mean, shift_logfc_sd, size=n_iso)
+            pi_cond2_unnorm = pi_base * np.exp(log_fc)
+            pi_cond2 = pi_cond2_unnorm / np.sum(pi_cond2_unnorm)
+        else:
+            pi_cond2 = pi_base
+            
+        sample_iso_counts = {iso: [] for iso in iso_names}
+        
+        for s, sample in enumerate(samples):
+            cond = metadata_df.loc[s, 'condition']
+            pi_current = pi_cond2 if cond == conditions[1] else pi_base
+            
+            # Realized gene base rate
+            mu_gene_sample = mu_gene * scaling_factors[s]
+            if n_param_gene < 1e5:
+                realized_gene_rate = np.random.gamma(shape=n_param_gene, scale=mu_gene_sample/n_param_gene)
+            else:
+                realized_gene_rate = mu_gene_sample
+            
+            for i, iso in enumerate(iso_names):
+                mu_iso = realized_gene_rate * pi_current[i]
+                
+                if mu_iso > 0:
+                    p_param_iso = n_param_iso / (n_param_iso + mu_iso)
+                    count = np.random.negative_binomial(n_param_iso, p_param_iso)
+                else:
+                    count = 0
+                    
+                sample_iso_counts[iso].append(count)
+                
+        for iso in iso_names:
+            iso_counts_dict[iso] = sample_iso_counts[iso]
+        
+    iso_counts_df = pd.DataFrame(iso_counts_dict, index=samples).transpose()
+    
+    return iso_counts_df, metadata_df, isoform_to_gene, diff_genes

@@ -23,6 +23,7 @@ import warnings
 from statsmodels.stats.multitest import multipletests
 
 from typing import Tuple
+from scipy.special import digamma, polygamma
 
 def apply_deseq2_normalization(
     counts_df: pd.DataFrame, 
@@ -560,19 +561,22 @@ def test_differential_expression(means_df, errors_df, cond_A, cond_B):
 # --- FULL BAYESIAN MULTIPROCESSING WORKER ---
 def _sanity_full_bayesian_worker(args):
     """
-    Computes the marginalized posteriors for a single gene across a fixed grid 
-    of variance values (v), matching the original C++ Sanity implementation.
-    Optionally applies an Empirical Bayes Log-Normal prior derived from population trends.
+    Computes marginalized posteriors, including q_g integration for exact 
+    digamma/trigamma global mean calculations.
     """
-    i, n_g, exp_n_g, n_samples, v_grid, min_variance, eb_prior_mean, eb_prior_var = args
+    # FIX: We now receive N_c and alpha_g_val separately instead of a pre-multiplied exp_n_g
+    i, n_g, N_c, alpha_g_val, n_samples, v_grid, min_variance, eb_prior_mean, eb_prior_var = args
+    
+    # Calculate exp_n_g inside the worker for the Newton-Raphson solver
+    exp_n_g = alpha_g_val * N_c
     
     numbin = len(v_grid)
     log_liks = np.zeros(numbin)
     deltas_grid = np.zeros((numbin, n_samples))
     variances_grid = np.zeros((numbin, n_samples))
+    q_g_grid = np.zeros(numbin) 
     
     for k, v in enumerate(v_grid):
-        # 1. Newton-Raphson to solve for cell-specific log-transcription quotients (deltas)
         d = np.zeros(n_samples)
         for j in range(n_samples):
             current_d = np.log(max(n_g[j], min_variance) / exp_n_g[j]) if n_g[j] > 0 else 0.0
@@ -587,7 +591,6 @@ def _sanity_full_bayesian_worker(args):
             
         deltas_grid[k, :] = d
         
-        # 2. Compute log likelihood (Evidence) for this variance bin
         term1 = (d ** 2) / (2 * v)
         term2 = -n_g * d
         term3 = exp_n_g * np.exp(d)
@@ -595,38 +598,33 @@ def _sanity_full_bayesian_worker(args):
         
         log_evidence = -np.sum(term1 + term2 + term3 + term4)
         
-        # 3. Apply Empirical Bayes Shrinkage Prior (if provided)
         if eb_prior_mean is not None and eb_prior_var is not None:
-            # Log-Normal prior probability centered on the population trend
             log_prior = -0.5 * ((np.log(v) - eb_prior_mean)**2 / eb_prior_var)
             log_evidence += log_prior
             
         log_liks[k] = log_evidence
-        
-        # 4. Compute variance of deltas at this specific v
         variances_grid[k, :] = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v)
         
-    # 5. Convert log-likelihoods to normalized probabilities (avoiding underflow)
+        # FIX: Calculate q_g strictly using N_c, perfectly matching original Sanity C++
+        q_g_grid[k] = np.log(np.sum(N_c * np.exp(d)))
+        
     max_ll = np.max(log_liks)
     probs = np.exp(log_liks - max_ll)
     probs_sum = np.sum(probs)
-    if probs_sum > 0:
-        probs /= probs_sum
-    else:
-        probs = np.ones(numbin) / numbin # Fallback for flat likelihoods
+    probs = probs / probs_sum if probs_sum > 0 else np.ones(numbin) / numbin
         
-    # 6. Marginalize deltas over the variance grid
     expected_deltas = np.sum(probs[:, np.newaxis] * deltas_grid, axis=0)
-    
-    # 7. Law of Total Variance: Var(X) = E[Var(X|V)] + Var(E[X|V])
     expected_vars = np.sum(probs[:, np.newaxis] * variances_grid, axis=0)
     var_of_expectations = np.sum(probs[:, np.newaxis] * (deltas_grid - expected_deltas)**2, axis=0)
-    
     final_variances = expected_vars + var_of_expectations
+    
     expected_v_g = np.sum(probs * v_grid)
     max_lik_v_g = v_grid[np.argmax(probs)]
+    
+    expected_q_g = np.sum(probs * q_g_grid)
+    var_q_g = np.sum(probs * (q_g_grid - expected_q_g)**2)
 
-    return i, expected_deltas, final_variances, expected_v_g, max_lik_v_g
+    return i, expected_deltas, final_variances, expected_v_g, max_lik_v_g, expected_q_g, var_q_g
 
 
 def apply_sanity_normalization_full_bayesian(
@@ -635,7 +633,7 @@ def apply_sanity_normalization_full_bayesian(
     sample_col: str = 'sample', 
     cond_col: str = 'condition', 
     empirical_bayes: bool = False,
-    shrinkage_strength: float = 1.0,  # <-- NEW: Increase this to pull estimates tighter to the trend
+    shrinkage_strength: float = 1.0, 
     vmin: float = 0.001, 
     vmax: float = 50.0, 
     numbin: int = 160,
@@ -665,27 +663,24 @@ def apply_sanity_normalization_full_bayesian(
     N_c = counts.sum(axis=0)
     total_counts = N_c.sum()
     alpha_g = counts.sum(axis=1) / total_counts 
-    expected_n = np.outer(alpha_g, N_c)
     
     if n_cores is None:
         n_cores = max(1, mp.cpu_count() - 1)
         
-    # Construct the log-spaced grid of variances (matching C++ Sanity)
     deltav = np.log(vmax / vmin) / (numbin - 1)
     v_grid = vmin * np.exp(deltav * np.arange(numbin))
     
     if empirical_bayes:
         print(f"PASS 1: Running Initial Full Bayesian inference on {n_genes} genes to estimate variances...")
-        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
-        
+        # FIX: Pass N_c array and alpha_g scalar to the worker
+        worker_args = [(i, counts[i, :], N_c, alpha_g[i], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
         with mp.Pool(processes=n_cores) as pool:
             pass1_results = pool.map(_sanity_full_bayesian_worker, worker_args)
             
         pass1_results.sort(key=lambda x: x[0])
-        # Use MAP estimates for the trend fitting
         raw_v_g = np.array([x[4] for x in pass1_results]) 
         
-        print("PASS 1.5: Applying Empirical Bayes Variance Shrinkage (Overdispersion-Only Fit)...")
+        print("PASS 2: Applying Empirical Bayes Variance Shrinkage...")
         df_trend = pd.DataFrame({'expr': np.log10(alpha_g), 'v_g': raw_v_g})
         df_trend = df_trend.sort_values('expr')
         
@@ -697,8 +692,6 @@ def apply_sanity_normalization_full_bayesian(
             trend = sm.nonparametric.lowess(endog=valid_vg, exog=valid_expr, frac=0.2, return_sorted=False)
             interpolator = interp1d(valid_expr, trend, kind='linear', fill_value="extrapolate")
             global_trend = interpolator(df_trend['expr'].values)
-            
-            # Calculate the variance of residuals (spread around the trend) to set the width of the empirical prior
             log_resids = np.log(valid_vg) - np.log(np.clip(trend, 1e-10, None))
             prior_var = np.var(log_resids, ddof=1) if len(log_resids) > 1 else 1.0
         else:
@@ -708,79 +701,226 @@ def apply_sanity_normalization_full_bayesian(
         min_floor = np.quantile(valid_vg, 0.05) if len(valid_vg) > 0 else 1e-3
         df_trend['trended_v_g'] = np.clip(global_trend, a_min=min_floor, a_max=None)
         
-        # Chi-Squared small-sample bias correction
         df = max(1, n_samples - 1)
-        chi2_median = stats.chi2.ppf(0.5, df)
-        correction_factor = n_samples / chi2_median
-        
+        correction_factor = n_samples / stats.chi2.ppf(0.5, df)
         df_trend['robust_v_g'] = df_trend['trended_v_g'] * correction_factor
         df_trend = df_trend.sort_index()
         
         eb_prior_means = np.log(df_trend['robust_v_g'].values)
         eb_prior_var = max(prior_var / shrinkage_strength, 0.01)
         
-        print("PASS 2: Finalizing Marginalized Posteriors with Empirical Prior...")
-        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, eb_prior_means[i], eb_prior_var) for i in range(n_genes)]
-        
+        # FIX: Pass N_c array and alpha_g scalar to the worker
+        worker_args = [(i, counts[i, :], N_c, alpha_g[i], n_samples, v_grid, min_variance, eb_prior_means[i], eb_prior_var) for i in range(n_genes)]
         with mp.Pool(processes=n_cores) as pool:
             results = pool.map(_sanity_full_bayesian_worker, worker_args)
-            
     else:
-        print(f"Running Full Bayesian Sanity inference on {n_genes} genes using {n_cores} cores...")
-        print(f"Integrating over {numbin} variance bins between {vmin} and {vmax}.")
-        worker_args = [(i, counts[i, :], expected_n[i, :], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
-        
+        print(f"Running Full Bayesian inference on {n_genes} genes")
+        # FIX: Pass N_c array and alpha_g scalar to the worker
+        worker_args = [(i, counts[i, :], N_c, alpha_g[i], n_samples, v_grid, min_variance, None, None) for i in range(n_genes)]
         with mp.Pool(processes=n_cores) as pool:
             results = pool.map(_sanity_full_bayesian_worker, worker_args)
             
-    # Sort results to maintain original index order
     results.sort(key=lambda x: x[0])
     deltas = np.array([x[1] for x in results])
     variances = np.array([x[2] for x in results])
     expected_v_g = np.array([x[3] for x in results])
     max_v_g = np.array([x[4] for x in results])
+    expected_q_g = np.array([x[5] for x in results])
+    var_q_g = np.array([x[6] for x in results])
 
     ln2 = np.log(2)
     deltas_log2 = deltas / ln2
     variances_log2 = variances / (ln2**2)
     
-    median_lib_size = np.median(N_c)
-    log2_base_expr = np.log2(alpha_g * median_lib_size + 1e-18)
+    # -------------------------------------------------------------
+    # EXACT GLOBAL MEAN & TRIGAMMA ERROR BAR
+    # -------------------------------------------------------------
+    n_g_total = counts.sum(axis=1) 
     
-    sample_log2_expr = log2_base_expr[:, np.newaxis] + deltas_log2
+    # Global mean LTQ is now accurately restored
+    global_mean_nat = digamma(n_g_total + 1) - expected_q_g
+    global_mean_log2 = global_mean_nat / ln2
+    
+    trigamma_term = polygamma(1, n_g_total + 1)
+    global_error_var_nat = trigamma_term + var_q_g
+    global_error_var_log2 = global_error_var_nat / (ln2**2)
+    
+    median_lib_size = np.median(N_c)
+    sample_log2_expr = global_mean_log2[:, np.newaxis] + deltas_log2 + np.log2(median_lib_size)
     sample_norm_counts_df = pd.DataFrame(sample_log2_expr, index=genes, columns=common_samples)
     
     cond_means = {}
-    cond_errors = {}
+    cond_errors_relative = {} 
+    cond_errors_absolute = {} 
     
     for cond in conditions:
         idx = np.where(sample_map == cond)[0]
         n_reps = len(idx)
         
-        # Mean across biological replicates
-        cond_means[cond] = log2_base_expr + np.mean(deltas_log2[:, idx], axis=1)
+        cond_means[cond] = global_mean_log2 + np.mean(deltas_log2[:, idx], axis=1) + np.log2(median_lib_size)
         
-        # Combine empirical variance and marginalized posterior variance
         empirical_var = np.var(deltas_log2[:, idx], axis=1, ddof=1) if n_reps > 1 else 0
         posterior_var = np.mean(variances_log2[:, idx], axis=1) 
-        cond_errors[cond] = np.sqrt((empirical_var + posterior_var) / n_reps)
+        relative_var = (empirical_var + posterior_var) / n_reps
+        
+        cond_errors_relative[cond] = np.sqrt(relative_var)
+        cond_errors_absolute[cond] = np.sqrt(relative_var + global_error_var_log2)
 
     means_df = pd.DataFrame(cond_means, index=genes)
-    errors_df = pd.DataFrame(cond_errors, index=genes)
+    errors_relative_df = pd.DataFrame(cond_errors_relative, index=genes)
+    errors_absolute_df = pd.DataFrame(cond_errors_absolute, index=genes)
     
-    # Structure the variance dataframe based on what was run
+    variances_df = pd.DataFrame(variances_log2, index=genes, columns=common_samples)
+    
+    vg_df = pd.DataFrame({
+        'marginalized_v_g': expected_v_g, 
+        'MAP_v_g': max_v_g,
+        'global_mean_error_log2': np.sqrt(global_error_var_log2)
+    }, index=genes)
+    
     if empirical_bayes:
-        vg_df = pd.DataFrame({
-            'raw_MAP_v_g': raw_v_g,
-            'trended_prior_v_g': df_trend['robust_v_g'].values,
-            'marginalized_v_g': expected_v_g, 
-            'MAP_v_g': max_v_g
-        }, index=genes)
-    else:
-        vg_df = pd.DataFrame({
-            'marginalized_v_g': expected_v_g, 
-            'MAP_v_g': max_v_g
-        }, index=genes)
+        vg_df.insert(0, 'raw_MAP_v_g', raw_v_g)
+        vg_df.insert(1, 'trended_prior_v_g', df_trend['robust_v_g'].values)
     
     print("Full Bayesian Sanity normalization complete.")
-    return sample_norm_counts_df, means_df, errors_df, vg_df, median_lib_size
+    
+    return sample_norm_counts_df, means_df, errors_relative_df, errors_absolute_df, vg_df, median_lib_size, variances_df
+
+def test_differential_relative_usage(
+    norm_counts_df: pd.DataFrame, 
+    variances_df: pd.DataFrame, 
+    metadata_df: pd.DataFrame, 
+    isoform_pairs: list, 
+    cond_A: str, 
+    cond_B: str,
+    sample_col: str = 'sample', 
+    cond_col: str = 'condition'
+) -> pd.DataFrame:
+    """
+    Tests for Differential Relative Usage (e.g., Alternative Splicing, APA) between two conditions
+    using Full Bayesian cell-level posteriors.
+    
+    Parameters
+    ----------
+    norm_counts_df : pd.DataFrame
+        normalized log2 expression estimates (output from Sanity).
+    variances_df : pd.DataFrame
+        log2 posterior variances (output from Sanity).
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to conditions.
+    isoform_pairs : list of tuples
+        List of (Isoform_1_ID, Isoform_2_ID) to compare. (e.g., [('GeneX_Proximal', 'GeneX_Distal')])
+    cond_A : str
+        Primary condition (Numerator in the fold-change).
+    cond_B : str
+        Reference condition (Denominator in the fold-change).
+        
+    Returns
+    -------
+    res_df : pd.DataFrame
+        DataFrame containing the Delta-Delta Log2 Ratio, Standard Error, Z-score, and FDR.
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    
+    cells_A = sample_map[sample_map == cond_A].index.intersection(norm_counts_df.columns)
+    cells_B = sample_map[sample_map == cond_B].index.intersection(norm_counts_df.columns)
+    
+    n_A = len(cells_A)
+    n_B = len(cells_B)
+    
+    results = []
+    
+    for iso1, iso2 in isoform_pairs:
+        # Check if both isoforms survived filtering
+        if iso1 not in norm_counts_df.index or iso2 not in norm_counts_df.index:
+            continue
+            
+        # 1. Calculate Per-sample Log2 Ratios: log2(Iso1) - log2(Iso2)
+        log2_ratio_cells = norm_counts_df.loc[iso1] - norm_counts_df.loc[iso2]
+        
+        # 2. Calculate Per-sample Posterior Variance of the Ratio
+        # Because the Poisson draws are conditionally independent given the rates, 
+        # the posterior uncertainty of the difference is the sum of the uncertainties.
+        var_ratio_cells = variances_df.loc[iso1] + variances_df.loc[iso2]
+        
+        # 3. Aggregate for Condition A
+        mean_ratio_A = log2_ratio_cells[cells_A].mean()
+        # Empirical variance naturally captures the biological covariance Cov(Iso1, Iso2) across cells
+        empirical_var_A = log2_ratio_cells[cells_A].var(ddof=1) if n_A > 1 else 0
+        posterior_var_A = var_ratio_cells[cells_A].mean()
+        se_ratio_A = np.sqrt((empirical_var_A + posterior_var_A) / n_A)
+        
+        # 4. Aggregate for Condition B
+        mean_ratio_B = log2_ratio_cells[cells_B].mean()
+        empirical_var_B = log2_ratio_cells[cells_B].var(ddof=1) if n_B > 1 else 0
+        posterior_var_B = var_ratio_cells[cells_B].mean()
+        se_ratio_B = np.sqrt((empirical_var_B + posterior_var_B) / n_B)
+        
+        # 5. Delta-Delta Log2 FC (Difference of the Ratios)
+        dd_log2fc = mean_ratio_A - mean_ratio_B
+        se_diff = np.sqrt(se_ratio_A**2 + se_ratio_B**2)
+        
+        z_score = dd_log2fc / se_diff if se_diff > 0 else 0
+        p_val = 2 * stats.norm.sf(np.abs(z_score))
+        
+        results.append({
+            'Pair': f"{iso1}_vs_{iso2}",
+            'isoform_1': iso1,
+            'isoform_2': iso2,
+            'log2Ratio_A': mean_ratio_A,
+            'log2Ratio_B': mean_ratio_B,
+            'dd_log2FC': dd_log2fc,
+            'SE': se_diff,
+            'Z_score': z_score,
+            'p_value': p_val
+        })
+        
+    res_df = pd.DataFrame(results).set_index('Pair')
+    
+    # Calculate FDR (Benjamini-Hochberg)
+    if not res_df.empty:
+        mask = ~res_df['p_value'].isna()
+        res_df.loc[mask, 'padj'] = multipletests(res_df.loc[mask, 'p_value'], method='fdr_bh')[1]
+        
+    return res_df
+
+def prepare_isoform_sanity_matrix(iso_counts_df: pd.DataFrame, isoform_to_gene: dict) -> Tuple[pd.DataFrame, list]:
+    """
+    Creates an augmented count matrix containing both the original isoforms
+    and a 'Rest_of_Gene' count for each isoform to maintain Poisson independence.
+    
+    Returns
+    -------
+    augmented_counts_df : pd.DataFrame
+        Raw counts matrix ready for Sanity, containing Isoforms and Rest_of_Gene rows.
+    iso_vs_rest_pairs : list of tuples
+        List of pairs formatted for the test/plot functions.
+    """
+    # 1. Calculate Total Gene Counts
+    gene_counts = pd.DataFrame(index=iso_counts_df.index)
+    gene_mapping_df = pd.DataFrame(list(isoform_to_gene.items()), columns=['Isoform', 'Gene'])
+    
+    gene_sums = {}
+    for gene, group in gene_mapping_df.groupby('Gene'):
+        valid_isos = [iso for iso in group['Isoform'] if iso in iso_counts_df.index]
+        if valid_isos:
+            gene_sums[gene] = iso_counts_df.loc[valid_isos].sum(axis=0)
+            
+    gene_counts_df = pd.DataFrame(gene_sums).T
+    
+    # 2. Calculate "Rest of Gene" for each isoform
+    rest_counts_dict = {}
+    iso_vs_rest_pairs = []
+    
+    for iso, gene in isoform_to_gene.items():
+        if iso in iso_counts_df.index and gene in gene_counts_df.index:
+            # Rest of gene = Total Gene - This Isoform
+            rest_counts_dict[f"{iso}_REST"] = gene_counts_df.loc[gene] - iso_counts_df.loc[iso]
+            iso_vs_rest_pairs.append((iso, f"{iso}_REST"))
+            
+    rest_counts_df = pd.DataFrame(rest_counts_dict).T
+    
+    # 3. Combine into one augmented matrix
+    augmented_counts_df = pd.concat([iso_counts_df, rest_counts_df])
+    
+    return augmented_counts_df, iso_vs_rest_pairs

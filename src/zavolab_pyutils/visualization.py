@@ -646,3 +646,158 @@ def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
     dir_path = Path(savefig_path).parent
     dir_path.mkdir(parents=True, exist_ok=True)
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+def plot_sanity_relative_usage_with_ci(
+    norm_counts_df, variances_df, metadata_df, isoform_pairs, 
+    savefig_path, sample_col='sample', cond_col='condition', 
+    CI_limit=0.95, adjust_multiple_comparisons=False,
+    log2_scale=True,
+):
+    """
+    Plots Sanity relative usage (ratio) of isoform pairs with Bayesian CI error bars.
+    
+    Parameters
+    ----------
+    norm_counts_df : pd.DataFrame
+        Cell-level log2 expression estimates (output from Sanity).
+    variances_df : pd.DataFrame
+        Cell-level log2 posterior variances (output from Sanity).
+    metadata_df : pd.DataFrame
+        Metadata mapping samples to conditions.
+    isoform_pairs : list of tuples
+        List of (Isoform_1_ID, Isoform_2_ID) to compare. (e.g., [('GeneX_Proximal', 'GeneX_Distal')])
+    savefig_path : str or pathlib.Path
+        Output file path.
+    sample_col : str, optional
+        Column in metadata_df with sample IDs. Default is 'sample'.
+    cond_col : str, optional
+        Column in metadata_df with condition labels. Default is 'condition'.
+    CI_limit : float, optional
+        Confidence interval limit (e.g., 0.95 for 95% CI). Default is 0.95.
+    adjust_multiple_comparisons : bool, optional
+        If True, applies a Bonferroni correction to the CI width based on the 
+        number of pairwise condition comparisons. Default is False.
+    log2_scale : bool, optional
+        If True (default), plots values on the log2 scale. 
+        If False, values and error bars are exponentiated to the natural ratio scale.
+    """
+    sample_map = metadata_df.set_index(sample_col)[cond_col]
+    order = sorted(sample_map.dropna().unique())
+    n_conditions = len(order)
+    
+    # Calculate Alpha with optional Bonferroni correction
+    alpha_val = 1.0 - CI_limit
+    if adjust_multiple_comparisons and n_conditions > 2:
+        num_comparisons = (n_conditions * (n_conditions - 1)) / 2
+        alpha_val /= num_comparisons
+        
+    z_score = stats.norm.ppf(1 - alpha_val / 2)
+    
+    sns.set(font_scale=1, style="white")
+    
+    # Filter valid pairs to ensure both isoforms exist in the count matrix
+    valid_pairs = []
+    for iso1, iso2 in isoform_pairs:
+        if iso1 in norm_counts_df.index and iso2 in norm_counts_df.index:
+            valid_pairs.append((iso1, iso2))
+        else:
+            print(f"Warning: One or both isoforms not found in count matrix for pair ({iso1}, {iso2}). Skipping this pair.")
+            
+    if not valid_pairs:
+        print("No valid isoform pairs found in the provided data.")
+        return
+        
+    # Set up matplotlib figure dimensions
+    fig, axes = plt.subplots(1, len(valid_pairs), sharey=True, figsize=(2.8*len(valid_pairs), 5.2))
+    if len(valid_pairs) == 1: 
+        axes = [axes]
+        
+    for k, (iso1, iso2) in enumerate(valid_pairs):
+        ax = axes[k]
+        pair_name = f"{iso1}\nvs\n{iso2}"
+        
+        # 1. Calculate cell-level log2 ratios and aggregate posterior variances
+        log2_ratio_cells = norm_counts_df.loc[iso1] - norm_counts_df.loc[iso2]
+        var_ratio_cells = variances_df.loc[iso1] + variances_df.loc[iso2]
+        
+        # Prepare data for seaborn stripplot
+        pair_data = pd.DataFrame({
+            sample_col: log2_ratio_cells.index,
+            'log2_ratio': log2_ratio_cells.values
+        })
+        pair_data = pd.merge(metadata_df[[sample_col, cond_col]], pair_data, how='inner', on=sample_col)
+        
+        y_pos = np.arange(len(order))
+        log2_means = []
+        err_margins = []
+        
+        # 2. Calculate condition-level aggregated stats for the error bars
+        for cond in order:
+            cells_in_cond = sample_map[sample_map == cond].index.intersection(norm_counts_df.columns)
+            n_cells = len(cells_in_cond)
+            
+            if n_cells == 0:
+                log2_means.append(np.nan)
+                err_margins.append(np.nan)
+                continue
+                
+            # Mean ratio
+            mean_ratio = log2_ratio_cells[cells_in_cond].mean()
+            
+            # Combine empirical variance and marginalized posterior variance
+            empirical_var = log2_ratio_cells[cells_in_cond].var(ddof=1) if n_cells > 1 else 0
+            posterior_var = var_ratio_cells[cells_in_cond].mean()
+            
+            se_ratio = np.sqrt((empirical_var + posterior_var) / n_cells)
+            
+            log2_means.append(mean_ratio)
+            err_margins.append(se_ratio * z_score)
+            
+        log2_means = np.array(log2_means)
+        err_margins = np.array(err_margins)
+        
+        # --- NEW LOGIC: Adjust for scale ---
+        if log2_scale:
+            plot_means = log2_means
+            xerr = err_margins
+            x_col = 'log2_ratio'
+            x_label = '$log_2$(rel. usage ratio)'
+        else:
+            # Exponentiate the raw cell data for the stripplot
+            pair_data['natural_ratio'] = 2 ** pair_data['log2_ratio']
+            x_col = 'natural_ratio'
+            x_label = 'Relative usage ratio'
+            
+            # Exponentiate the means and CI bounds
+            plot_means = 2 ** log2_means
+            lower_bounds = 2 ** (log2_means - err_margins)
+            upper_bounds = 2 ** (log2_means + err_margins)
+            
+            # Matplotlib asymmetric errors: distance from mean to lower bound, and mean to upper bound
+            xerr = np.array([
+                plot_means - lower_bounds, 
+                upper_bounds - plot_means
+            ])
+            
+        # 3. Plotting
+        # Draw the lines connecting condition means
+        ax.plot(plot_means, y_pos, color='grey', zorder=1, alpha=0.7)
+        
+        # Draw the error bars representing the Bayesian Confidence Intervals
+        ax.errorbar(plot_means, y_pos, xerr=xerr, fmt='o', color='black', capsize=4, zorder=2, markersize=5)
+        
+        # Overlay the individual cell points
+        sns.stripplot(
+            ax=ax, data=pair_data, x=x_col, y=cond_col, order=order, 
+            color='white', size=4, edgecolor='black', linewidth=1, alpha=0.5, zorder=3, jitter=True
+        )
+        
+        # Formatting
+        ax.set(title=pair_name, ylabel='', xlabel=x_label)
+        ax.tick_params(left=True, bottom=True)
+        if k > 0: 
+            ax.tick_params(left=False)
+        
+    # Save the figure
+    Path(savefig_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)

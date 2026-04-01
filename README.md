@@ -105,9 +105,9 @@ plot_gene_expression_with_ci(
 
 ## Documentation and examples of usage
 
-For detailed documentation, see the [docs](docs/) directory. **TO DO**
-
-For a working example, see [test_module.ipynb](test_module.ipynb) which demonstrates the `deseq2_normalize` function with sample data.
+For a examples and testing, use [test_module.ipynb](test_module.ipynb).
+Use AI to ask about the functionality. See the example with Gemini in [docs](docs/).
+For further detailed documentation, see the [docs](docs/) directory. **TO DO**
 
 ## Testing **TO DO**
 
