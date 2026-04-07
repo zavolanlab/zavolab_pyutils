@@ -11,29 +11,22 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 - **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on pySanity outputs or Quantile regression
 - **Visualization of isoform relative usage levels across conditions for selected isoforms**: confidence interval plotting based on pySanity outputs
 - **Differential expression and differential usage analysis**: based on pySanity outputs
-- **Annotation Conversion**: Convert between GTF and GFF3 formats (**TO DO**)
-- **Genomic Data Processing**: Utilities for working with genomic annotation files (**TO DO**)
+- **Annotation Conversion and Processing**: Convert between GTF and GFF3 formats, extract terminal exons from annotation etc
 
 ## Installation
 
-### From source
+### Developer Setup from source, with conda environment
+
 ```bash
 git clone https://github.com/zavolab/zavolab_pyutils.git
 cd zavolab_pyutils
-pip install -e .
-```
-
-### With conda environment
-Create a conda environment from the provided `environment.yml` file:
-
-```bash
 conda env create --file=environment.yml
 conda activate zavolab_pyutils
+make setup-dev
 ```
+Conda manages non-python dependencies (e.g. bedtools) that are used in several modules of the package.
 
-The environment automatically installs the package and all dependencies including ipykernel for Jupyter notebook support.
-
-### From PyPI (TO DO)
+### From PyPI (non-python dependencies will not be installed)
 ```bash
 pip install zavolab_pyutils
 ```

@@ -372,7 +372,7 @@ def plot_mean_variance_diagnostics(all_plot_data, savefig_path):
 
 def plot_mean_vs_cv(
     norm_counts_df, metadata_df, savefig_path, 
-    sample_col='sample', cond_col='condition', is_log2=False
+    sample_col='sample', cond_col='condition', is_log2=False, 
 ):
     """
     Plots Mean Expression vs Coefficient of Variation (CV).
@@ -466,7 +466,8 @@ def plot_mean_vs_cv(
 def plot_sanity_gene_expression_with_ci(
     sample_norm_df, means_df, errors_df, metadata_df, selected_genes, 
     savefig_path, sample_col='sample', cond_col='condition', 
-    CI_limit=0.95, adjust_multiple_comparisons=False
+    condition_order=None,palette=None,
+    CI_limit=0.95, adjust_multiple_comparisons=False,
 ):
     """
     Plots Sanity log2 normalized counts with Bayesian CI error bars.
@@ -494,8 +495,10 @@ def plot_sanity_gene_expression_with_ci(
     melted = input_data_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
     melted = pd.melt(melted, id_vars=['gene_name'], var_name=sample_col, value_name='log2_expr')
     melted = pd.merge(metadata_df[[sample_col, cond_col]], melted, how='right', on=sample_col)
-    
-    order = sorted(melted[cond_col].unique())
+    if condition_order is None:
+        order = sorted(melted[cond_col].unique())
+    else:
+        order = condition_order
     n_conditions = len(order)
     
     # Calculate Alpha with optional Bonferroni correction
@@ -518,9 +521,13 @@ def plot_sanity_gene_expression_with_ci(
         log2_means = means_df.loc[gene, order].values
         err_margins = errors_df.loc[gene, order].values * z_score
         
-        ax.plot(log2_means, y_pos, color='grey', zorder=1, alpha=0.7)
-        ax.errorbar(log2_means, y_pos, xerr=err_margins, fmt='o', color='black', capsize=4, zorder=2, markersize=5)
-        sns.stripplot(
+        cur_data_df = pd.DataFrame([log2_means,y_pos]).transpose()
+        cur_data_df.columns = ['x','y']
+
+        ax = sns.scatterplot(data=cur_data_df, x='x', y='y', color=('grey' if palette is None else None), zorder=1, alpha=0.7,
+                             palette=palette)
+        ax.errorbar(log2_means, y_pos, xerr=err_margins, fmt='o', color='black', capsize=4, zorder=2, markersize=0)
+        ax = sns.stripplot(
             ax=ax, data=gene_data, x='log2_expr', y=cond_col, order=order, 
             color='white', size=4, edgecolor='black', linewidth=1, alpha=0.5, zorder=3, jitter=True
         )
@@ -603,7 +610,7 @@ def plot_expr_vs_libsize_correlation(
     dir_path.mkdir(parents=True, exist_ok=True)
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
 
-def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
+def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None, ylim=None):
     """
     Plots the inferred biological variance (v_g) against mean log2 expression (Sanity diagnostics).
     
@@ -617,6 +624,8 @@ def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
         Output file path.
     true_vg : float, optional
         Value to plot as a horizontal true reference line (for simulated data).
+    ylim : tuple, optional
+        Limits for the y-axis. Default is None.
     """
     # Calculate approximate base expression across all conditions
     base_expr = means_df.mean(axis=1)
@@ -641,7 +650,8 @@ def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None):
         ylabel="Inferred Biological Variance (v_g)"
     )
     ax.tick_params(left=True, bottom=True)
-    
+    if ylim is not None:
+        ax.set(ylim=ylim)
     fig.tight_layout()
     dir_path = Path(savefig_path).parent
     dir_path.mkdir(parents=True, exist_ok=True)
