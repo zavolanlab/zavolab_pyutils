@@ -21,15 +21,9 @@ def check_bedtools_installed():
             "(e.g., 'conda install -c bioconda bedtools' or 'sudo apt install bedtools')."
         )
 
-def get_terminal_exons(
-    gtf_file,
-    input_skiprows=5,
-    min_exons_per_transcript=3, 
-    exclude_overlapping_exons=True, 
-    TE_extension=100,temp_dir=None
-    ) -> pd.DataFrame:
+def parse_gtf_attributes_into_pd_dataframes(gtf_file,input_skiprows=5) -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
     """
-    Get terminal exons from a GTF annotation file.
+    Get full gtf, exons, and genes from a GTF annotation file.
     
     Parameters
     ----------
@@ -37,42 +31,17 @@ def get_terminal_exons(
         Path to input GTF file.
     input_skiprows : int, optional
         Number of header lines to skip in the GTF file. Default is 5 (compatible with GENCODE GTF files).
-    min_exons_per_transcript : int, optional
-        Minimum number of exons per transcript to consider. Default is 3.
-        To allow, e.g. for gene expression analysis using at least one internal exon
-    exclude_overlapping_exons : bool, optional
-        Whether to exclude overlapping exons. Default is True.
-    TE_extension : int, optional
-        Number of base pairs to extend the terminal exons. Default is 100.
-    temp_dir : str, optional
-        Path to temporary directory for intermediate files. 
-        If None, a 'temp' directory will be created in the current working directory or $TMPDIR environment variable if present.
-        Default is None.
     Returns
     -------
-    TE_bed_df : pd.DataFrame
-        BED-formatted DataFrame containing only terminal exons.
-    genes : pd.DataFrame
-        DataFrame containing gene-level information.
-    exons : pd.DataFrame
-        DataFrame containing exon-level information.
     gtf_df : pd.DataFrame
         Original pandas-parsed GTF DataFrame.
+    genes_df : pd.DataFrame
+        DataFrame containing gene-level information.
+    exons_df : pd.DataFrame
+        DataFrame containing exon-level information.
     Notes
     -----
-    This function handles GFF3 to GTF format conversion, standardizing
-    the attribute column format and adjusting coordinate systems as needed.
-    """
-    check_bedtools_installed() # Fail fast with a helpful error message if bedtools is not available
-
-    # Create temporary directory if not provided
-    if temp_dir is None:
-        temp_dir = os.getenv('TMPDIR', default='./temp/')  # Use environment variable for temporary directory or fallback to './temp/'
-        os.makedirs(temp_dir, exist_ok=True)
-    else:
-        os.makedirs(temp_dir, exist_ok=True)
-    print(f"Checked bedtools installation and created temporary directory at {temp_dir}...")
-
+    """ 
     gtf_df = pd.read_csv(gtf_file, delimiter="\t", index_col=None, header=None, skiprows=input_skiprows)
 
     # extract gene-level information
@@ -93,9 +62,54 @@ def get_terminal_exons(
     exons = pd.merge(exons.drop(['t'],axis=1),
                      exons.groupby('transcript_id').agg({'t':sum}).reset_index(),how='inner',on='transcript_id')
     print(f"Extracted exon-level information for {len(exons)} exons.")
+    genes_df = genes
+    exons_df = exons
+
+    return gtf_df, genes_df, exons_df
+
+def get_terminal_exons(
+    exons_df:pd.DataFrame,
+    min_exons_per_transcript=3, 
+    exclude_overlapping_exons=True, 
+    TE_extension=100,temp_dir=None
+    ) -> pd.DataFrame:
+    """
+    Get terminal exons from a GTF annotation file.
+    
+    Parameters
+    ----------
+    exons_df : pd.DataFrame
+        DataFrame containing exon-level information.
+    min_exons_per_transcript : int, optional
+        Minimum number of exons per transcript to consider. Default is 3.
+        To allow, e.g. for gene expression analysis using at least one internal exon
+    exclude_overlapping_exons : bool, optional
+        Whether to exclude overlapping exons. Default is True.
+    TE_extension : int, optional
+        Number of base pairs to extend the terminal exons. Default is 100.
+    temp_dir : str, optional
+        Path to temporary directory for intermediate files. 
+        If None, a 'temp' directory will be created in the current working directory or $TMPDIR environment variable if present.
+        Default is None.
+    Returns
+    -------
+    TE_bed_df : pd.DataFrame
+        BED-formatted DataFrame containing only terminal exons.
+    Notes
+    -----
+    """
+    check_bedtools_installed() # Fail fast with a helpful error message if bedtools is not available
+
+    # Create temporary directory if not provided
+    if temp_dir is None:
+        temp_dir = os.getenv('TMPDIR', default='./temp/')  # Use environment variable for temporary directory or fallback to './temp/'
+        os.makedirs(temp_dir, exist_ok=True)
+    else:
+        os.makedirs(temp_dir, exist_ok=True)
+    print(f"Checked bedtools installation and created temporary directory at {temp_dir}...")
 
     # selecting terminal exons of transcripts with at least min_exons_per_transcript exons (to allow for gene expression analysis using at least one internal exon)
-    exons_for_tandemPAS = exons.loc[(exons['t']==exons['exon_number'])&(exons['t']>=min_exons_per_transcript)].reset_index(drop=True)
+    exons_for_tandemPAS = exons_df.loc[(exons_df['t']==exons_df['exon_number'])&(exons_df['t']>=min_exons_per_transcript)].reset_index(drop=True)
     exons_for_tandemPAS = exons_for_tandemPAS[[0,3,4,6,'transcript_id','gene_id']].rename(columns ={0:'chr',3:'ex_start',4:'ex_end',6:'strand'})
     ### there should be no exon from the same gene that starts downstream from the reported start
     most_distal_exons_of_genes = exons_for_tandemPAS.groupby(['gene_id','chr','strand']).agg({'ex_start':max,'ex_end':min}).reset_index().rename(columns={'ex_start':'ex_start_dist','ex_end':'ex_end_dist'})
@@ -161,7 +175,7 @@ def get_terminal_exons(
     exons_for_tandemPAS_selected['ex_start'] = exons_for_tandemPAS_selected['ex_start']-1 # to stick to bed format
     TE_bed_df = exons_for_tandemPAS_selected[[0,'ex_start','ex_end','gene_id',4,5]].copy()
 
-    return TE_bed_df, genes, exons, gtf_df
+    return TE_bed_df
 
 
 def get_GTF_for_gene_expression_analysis():
