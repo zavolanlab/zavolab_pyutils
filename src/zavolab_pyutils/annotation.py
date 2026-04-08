@@ -54,9 +54,9 @@ def parse_gtf_attributes_into_pd_dataframes(gtf_file,input_skiprows=5) -> (pd.Da
     # extract exon-level information
     exons = gtf_df.loc[gtf_df[2]=='exon'].reset_index(drop=True)
     exons['gene_type'] = exons[8].str.split('gene_type "',expand=True)[1].str.split('";',expand=True)[0]
-    exons = exons.loc[exons['gene_type'].isin(['protein_coding'])].reset_index(drop=True) # leaving only protein-coding genes
     exons['transcript_id'] = exons[8].str.split('transcript_id "',expand=True)[1].str.split('";',expand=True)[0]
     exons['gene_id'] = exons[8].str.split('gene_id "',expand=True)[1].str.split('";',expand=True)[0]
+    exons['gene_name'] = exons[8].str.split('gene_name "',expand=True)[1].str.split('";',expand=True)[0]
     exons['exon_number'] = exons[8].str.split('exon_number ',expand=True)[1].str.split(';',expand=True)[0].str.replace('"','').astype('int')
     exons['t']=1
     exons = pd.merge(exons.drop(['t'],axis=1),
@@ -126,6 +126,7 @@ def get_terminal_exons(
     ###
 
     if exclude_overlapping_exons:
+        print(f"Selecting non-overlapping exons. Using bedtools to overlap exon coordinates.")
         # add extension of 100 nt to 3'end to check for overlaps
         exons_for_tandemPAS_plus = exons_for_tandemPAS.loc[exons_for_tandemPAS['strand']=='+']
         exons_for_tandemPAS_plus['ex_end_OL'] = exons_for_tandemPAS_plus['ex_end']+TE_extension
@@ -178,9 +179,201 @@ def get_terminal_exons(
     return TE_bed_df
 
 
-def get_GTF_for_gene_expression_analysis():
+def get_GTF_for_gene_expression_analysis(
+        exons_df:pd.DataFrame,
+        out_gtf_path: str,
+        gene_types_to_include: list = None,
+        exclude_first_exons: bool = True,
+        exclude_terminal_exons: bool = True,
+        remove_segments_associated_with_multiple_genes_on_same_strand: bool = True,
+        f: float = 0.8,
+        temp_dir: str = None,
+    ) -> pd.DataFrame:
+    """
+    Get GTF annotation for gene expression analysis, containing (almost) constitutive exons of selected gene types
+    
+    Parameters
+    ----------
+    exons_df : pd.DataFrame
+        DataFrame containing exon-level information. Expected to have columns 'transcript_id','gene_type', 'gene_id', 'gene_name',
+        'exon_number', 't' (total number of exons in the transcript), and other standard GTF columns.
+        The output of `parse_gtf_attributes_into_pd_dataframes()` can be used as input for this function.
+    out_gtf_path : str
+        Path to output GTF file that will be written with the selected genomic regions, GENCODE-like formatted with gene-transcript-exon structure.
+    gene_types_to_include : list, optional
+        List of gene types to include. Default is None, which would result in inclusion of all present gene types.
+    exclude_first_exons : bool, optional
+        Whether to exclude first exons. Default is True.
+    exclude_terminal_exons : bool, optional
+        Whether to exclude terminal (last) exons. Default is True.
+    remove_segments_associated_with_multiple_genes_on_same_strand : bool, optional
+        Whether to remove segments associated with multiple genes on the same strand. Default is True.
+    f : float, optional
+        Minimum fraction of transcripts of a gene that must contain an exonic segment for it to be included. Default is 0.8.
+    temp_dir : str, optional
+        Path to temporary directory for intermediate files. 
+        If None, a 'temp' directory will be created in the current working directory or $TMPDIR environment variable if present. Default is None.    
+    Returns
+    -------
+    gene_expression_gtf : pd.DataFrame
+        GTF-formatted DataFrame containing selected genomic regions, GENCODE-like formatted with gene-transcript-exon structure.
+    Notes
+    -----
+    """
+    check_bedtools_installed() # Fail fast with a helpful error message if bedtools is not available
+    # Create temporary directory if not provided
+    if temp_dir is None:
+        temp_dir = os.getenv('TMPDIR', default='./temp/')  # Use environment variable for temporary directory or fallback to './temp/'
+        os.makedirs(temp_dir, exist_ok=True)
+    else:
+        os.makedirs(temp_dir, exist_ok=True)
+    print(f"Checked bedtools installation and created temporary directory at {temp_dir}...\n")
 
-    return None
+    exons_sel_df = exons_df.copy()
+    print(f"start with {len(exons_sel_df)} exons.")
+    if exclude_first_exons:
+        exons_sel_df = exons_sel_df.loc[exons_sel_df['exon_number']>1].reset_index(drop=True)
+        print(f"After excluding first exons: {len(exons_sel_df)} exons.")
+    if exclude_terminal_exons:
+        exons_sel_df = exons_sel_df.loc[(exons_sel_df['t']==1)|(
+            (exons_sel_df['t']>exons_sel_df['exon_number']))].reset_index(drop=True) # take non-terminal and non-first exons only, unless one-exon gene
+        print(f"After excluding terminal exons: {len(exons_sel_df)} exons.")
+    if gene_types_to_include is not None:
+        exons_sel_df = exons_sel_df.loc[exons_sel_df['gene_type'].isin(gene_types_to_include)].reset_index(drop=True)
+        print(f"After filtering by gene types: {len(exons_sel_df)} exons.")
+    
+    exons_sel_df['score'] = 0
+    exons_sel_bed = exons_sel_df[[0,3,4,'transcript_id','score',6]]
+    exons_sel_bed[3] = exons_sel_bed[3]-1
+    
+    nonsorted_EXONS_bed = os.path.join(temp_dir, 'exons_in_transcripts.bed')
+    sorted_EXONS_bed = os.path.join(temp_dir, 'exons_in_transcripts.sorted.bed')
+
+    exons_sel_bed.to_csv(nonsorted_EXONS_bed, sep=str('\t'),header=False,index=None,quoting=csv.QUOTE_NONE)
+    command = 'bedtools sort -i '+nonsorted_EXONS_bed+' > '+sorted_EXONS_bed
+    out = subprocess.check_output(command, shell=True)
+    print(f"Sorted BED file with all exons. Exons with same genomic coordinates but different transcript_id are kept as separate entries.\n")
+
+    ####
+    # get all unique exonic segments
+    ####
+    exons_sel_df['start_True'] = True
+    exons_sel_df['start_False'] = False
+
+    a1 = []
+    a1 = a1 + [exons_sel_df[[0,3,6,'start_True']].drop_duplicates().rename(columns={3:1,6:2,'start_True':3}),
+                        exons_sel_df[[0,4,6,'start_False']].drop_duplicates().rename(columns={4:1,6:2,'start_False':3})]
+
+    points = pd.concat(a1).sort_values([2,0,1,3]).drop_duplicates([0,1,2]).reset_index(drop=True) # prioritize element ends over starts if the coordinate matches exactly
+
+    b = []
+    prev_chr,prev_coord,prev_str='',-1,''
+    for row in points.values:
+        if (row[0]==prev_chr and row[2]==prev_str):
+            b.append([row[0],prev_coord,(row[1]-1 if row[3] else row[1]),'n',0,row[2]])
+        prev_chr,prev_coord,prev_str = row[0],(row[1] if row[3] else row[1]+1),row[2]
+    segments = pd.DataFrame(b)
+    segments[1] = segments[1]-1
+    
+    print(f"Identified {len(segments)} unique exonic segments.\n")
+    nonsorted_SEGMENTS_bed = os.path.join(temp_dir, 'exonic_segments.bed')
+    sorted_SEGMENTS_bed = os.path.join(temp_dir, 'exonic_segments.sorted.bed')
+    segments.to_csv(nonsorted_SEGMENTS_bed, sep=str('\t'),header=False,index=None,quoting=csv.QUOTE_NONE)
+
+    command = 'bedtools sort -i '+nonsorted_SEGMENTS_bed+' > '+sorted_SEGMENTS_bed
+    out = subprocess.check_output(command, shell=True)
+    print(f"Sorted BED file with all unique exonic segments.\n")
+
+    ###
+    # intersect segments with exons to calculate in how many transcripts each segment is present
+    ###
+    intersection_bed = os.path.join(temp_dir, 'exonic_segments.intersection.bed')
+    command = 'bedtools intersect -sorted -wao -s -a '+sorted_SEGMENTS_bed+' -b '+sorted_EXONS_bed+' > '+intersection_bed
+    out = subprocess.check_output(command, shell=True)
+    print(f"Intersected exonic segments with exons to calculate transcript support for each segment.\n")
+
+    exonic_segments_intersection = pd.read_csv(intersection_bed,delimiter="\t",index_col=None,header=None)
+    exonic_segments_intersection['segment_len'] = exonic_segments_intersection[2]-exonic_segments_intersection[1]
+    # QC: remove cases when overlap is exactly the segment length
+    exonic_segments_intersection = exonic_segments_intersection.loc[exonic_segments_intersection[12]==exonic_segments_intersection['segment_len']].reset_index(drop=True)
+    
+    exonic_segments_intersection = exonic_segments_intersection[[0,1,2,5,'segment_len',9]].drop_duplicates().reset_index(drop=True)
+
+    # calculate how many transcripts there are in every gene, and also add gene_ids
+    gr = exons_sel_df[['transcript_id','gene_id']].drop_duplicates().reset_index(drop=True)
+    gr['c']=1
+    gr = pd.merge(gr.drop(['c'],axis=1),gr.groupby('gene_id').agg({'c':sum}).reset_index(),how='left',on='gene_id')
+
+    exonic_segments_intersection = pd.merge(exonic_segments_intersection.rename(columns={9:'transcript_id'}),gr,how='left',on='transcript_id')
+
+    if remove_segments_associated_with_multiple_genes_on_same_strand:
+        # remove segments that are associated with more than ONE gene ON THE SAME STRAND
+        gr = exonic_segments_intersection[[0,1,2,5,'segment_len','gene_id']].drop_duplicates().reset_index(drop=True) 
+        gr['t']=1
+        gr = gr.groupby([0,1,2,5,'segment_len']).agg({'t':sum}).reset_index()
+        exonic_segments_intersection = pd.merge(exonic_segments_intersection,gr.loc[gr['t']==1][[0,1,2,5]].reset_index(drop=True),how='inner',on=[0,1,2,5])
+        print(f"Removed segments that are associated with more than one gene on the same strand. Retained {len(exonic_segments_intersection[[0,1,2,5]].drop_duplicates())} segments.\n")
+
+    print(f"Identified {len(exonic_segments_intersection[[0,1,2,5]].drop_duplicates())} exonic segments corresponding to \n"+\
+        f"{len(exonic_segments_intersection)} exons in {len(exonic_segments_intersection['transcript_id'].unique())} transcripts \n"+\
+        f"in {len(exonic_segments_intersection['gene_id'].unique())} genes.\n")    
+    
+    # calculate in how many transcripts each segment is present
+    exonic_segments_intersection['t']=1
+    gr = exonic_segments_intersection.groupby([0,1,2,5,'segment_len','gene_id','c']).agg({'t':sum}).reset_index()
+    
+    gr = pd.merge(gr,exons_df[['gene_id','gene_name','gene_type']].drop_duplicates(),how='inner',on='gene_id')
+    
+    exonic_elements = gr.loc[gr['t']>gr['c']*f].reset_index(drop=True).copy()
+    print(f"\nAfter requiring that each segment is present in at least {f*100}% of transcripts, \n"+\
+          f"retained are {len(exonic_elements[[0,1,2,5]].drop_duplicates())} exonic segments \n"+\
+        f"in {len(exonic_elements['gene_id'].unique())} genes.")    
+    
+    print("\nFormatting the final GTF file with gene-transcript-exon structure. \n"+\
+          "Each exon corresponds to a selected exonic segment, \n"+
+          "and gene coordinates are defined as the min start and max end of the exonic segments associated with the gene. \n"+\
+            "Every gene has just one transcript, so gene and transcript elements are identical. \n"+\
+                f"The output GTF file will be sorted by gene_id and then by genomic coordinates.\n")
+    ###
+    # make final gtf file
+    ###
+    exonic_elements = exonic_elements.rename(columns={1:3,2:4,5:6})
+    exonic_elements[1] = 'CUSTOM'
+    exonic_elements[2] = 'exon'
+    exonic_elements[5] = '.'
+    exonic_elements[7] = '.'
+    exonic_elements = pd.concat([exonic_elements.loc[exonic_elements[6]=='+'].sort_values([0,3],ascending=[True,True]),
+                                exonic_elements.loc[exonic_elements[6]=='-'].sort_values([0,3],ascending=[True,False])]).reset_index(drop=True)
+    exonic_elements['d'] = 1
+    exonic_elements['exon_number'] = exonic_elements[['gene_id','d']].groupby('gene_id').cumsum()
+    exonic_elements['exon_id'] = exonic_elements['gene_id']+':exon_'+exonic_elements['exon_number'].astype('str')
+    exonic_elements[8] = 'gene_id "'+exonic_elements['gene_id']+'"; transcript_id "'+exonic_elements['gene_id']+'";'+\
+    ' gene_type "'+exonic_elements['gene_type']+'"; gene_name "'+exonic_elements['gene_name']+'"; transcript_type "'+exonic_elements['gene_type']+'"; transcript_name "'+exonic_elements['gene_name']+'"; '+\
+    'exon_number "'+exonic_elements['exon_number'].astype('str')+'"; exon_id "'+exonic_elements['exon_id']+'"'
+    exonic_elements['order'] = 3
+    exonic_elements_gtf = exonic_elements[list(range(0,9))+['gene_id','order']].copy()
+
+    exonic_elements_transcripts = exonic_elements.groupby([0,1,2,5,6,7,'gene_id','gene_name','gene_type']).agg({3:min,4:max}).reset_index()
+    exonic_elements_transcripts[2] = 'transcript'
+    exonic_elements_transcripts[8] = 'gene_id "'+exonic_elements_transcripts['gene_id']+'"; transcript_id "'+exonic_elements_transcripts['gene_id']+'";'+\
+    ' gene_type "'+exonic_elements_transcripts['gene_type']+'"; gene_name "'+exonic_elements_transcripts['gene_name']+'"; transcript_type "'+exonic_elements_transcripts['gene_type']+\
+    '"; transcript_name "'+exonic_elements_transcripts['gene_name']+'"'
+    exonic_elements_transcripts['order'] = 2
+    exonic_elements_transcripts_gtf = exonic_elements_transcripts[list(range(0,9))+['gene_id','order']]
+
+    exonic_elements_genes = exonic_elements.groupby([0,1,2,5,6,7,'gene_id','gene_name','gene_type']).agg({3:min,4:max}).reset_index()
+    exonic_elements_genes[2] = 'gene'
+    exonic_elements_genes[8] = 'gene_id "'+exonic_elements_genes['gene_id']+'"; gene_type "'+exonic_elements_genes['gene_type']+'"; gene_name "'+exonic_elements_genes['gene_name']+'"'
+    exonic_elements_genes['order'] = 1
+    exonic_elements_genes_gtf = exonic_elements_genes[list(range(0,9))+['gene_id','order']]
+
+    gene_expression_gtf = pd.concat([exonic_elements_genes_gtf,exonic_elements_transcripts_gtf,exonic_elements_gtf]).sort_values(['gene_id','order']).drop(['gene_id','order'],axis=1)
+    gene_expression_gtf = gene_expression_gtf.reset_index(drop=True)
+    
+    Path(out_gtf_path).parent.mkdir(parents=True, exist_ok=True)
+    gene_expression_gtf.to_csv(out_gtf_path, sep=str('\t'),header=False,index=None,quoting=csv.QUOTE_NONE)
+    print("Final gtf file written to "+out_gtf_path+"\n")
+    return gene_expression_gtf
 
 
 
