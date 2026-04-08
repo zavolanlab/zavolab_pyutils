@@ -108,7 +108,7 @@ def pca_plot(
     Parameters
     ----------
     data_df : pandas.DataFrame
-        Gene expression matrix with genes as rows and samples as columns.
+        Gene expression matrix with genes as rows and samples as columns. Log2-transformed expression values are recommended.
     samples_list : list of str
         List of column names in `data_df` corresponding to the samples to be plotted.
     metadata_df : pandas.DataFrame

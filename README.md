@@ -39,8 +39,12 @@ conda install -c bioconda zavolab_pyutils
 ## Documentation and examples of usage
 
 For various examples of usage and testing, use [test_module.ipynb](test_module.ipynb).
+
 Use AI to ask about the functionality. See the example with Gemini in [docs](docs/).
-For further detailed documentation, see the [docs](docs/) directory. **TO DO**
+
+For further practical examples, please look into other projects where the functions from the package have been used:
+[APA localization](https://github.com/zavolanlab/APA_localization/tree/nfya)
+this list will be continuosly updated...
 
 ## Testing
 
