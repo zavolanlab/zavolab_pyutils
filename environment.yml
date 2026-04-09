@@ -1,0 +1,18 @@
+name: zavolab_pyutils
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python >=3.9,<3.13
+  # Jupyter support on HPC clusters
+  - ipykernel
+  # useful third-party libraries
+  - bioconda::bedtools
+  # auxiliary tools for documentation
+  - conda-forge::pandoc
+  # pip packages - with editable install of this package
+  - pip
+  - pip:
+    - -e .
+  # - mypy

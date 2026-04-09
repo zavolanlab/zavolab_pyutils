@@ -1,42 +1,32 @@
-"""
-Tests for normalization module.
-"""
-
 import pytest
 import numpy as np
-from genomic_utils.normalization import normalize_by_library_size, compute_library_sizes
-
+import pandas as pd
+from zavolab_pyutils.read_count_data_analysis import apply_deseq2_normalization
 
 class TestNormalization:
-    """Test suite for normalization functions."""
-    
     @pytest.fixture
     def sample_counts(self):
-        """Create sample count matrix for testing."""
-        return np.array([
-            [100, 200, 150],  # Gene 1
-            [50, 100, 80],    # Gene 2
-            [200, 400, 300],  # Gene 3
+        data = np.array([
+            [100, 200, 150],
+            [50, 100, 80],
+            [200, 400, 300],
         ])
-    
-    def test_normalize_by_library_size_default(self, sample_counts):
-        """Test normalization with default TMM method."""
-        result = normalize_by_library_size(sample_counts)
-        assert result is not None
-        assert result.shape == sample_counts.shape
-    
-    def test_normalize_by_library_size_tpm(self, sample_counts):
-        """Test normalization with TPM method."""
-        result = normalize_by_library_size(sample_counts, method="tpm")
-        assert result is not None
-    
-    def test_normalize_invalid_method(self, sample_counts):
-        """Test that invalid method raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown normalization method"):
-            normalize_by_library_size(sample_counts, method="invalid")
-    
-    def test_compute_library_sizes(self, sample_counts):
-        """Test library size computation."""
-        lib_sizes = compute_library_sizes(sample_counts)
-        expected = np.array([350, 700, 530])
-        np.testing.assert_array_equal(lib_sizes, expected)
+        return pd.DataFrame(data, columns=["S1", "S2", "S3"], index=["G1", "G2", "G3"])
+
+    @pytest.fixture
+    def sample_metadata(self):
+        return pd.DataFrame({
+            "sample": ["S1", "S2", "S3"],
+            "condition": ["ctrl", "trt", "trt"]
+        })
+
+    def test_apply_deseq2_normalization_shape(self, sample_counts, sample_metadata):
+        # Pass the metadata dataframe instead of just a sample list
+        norm_counts, sfs_df = apply_deseq2_normalization(
+            counts_df=sample_counts, 
+            metadata_df=sample_metadata,
+            sample_col="sample",
+            cond_col="condition"
+        )
+        assert norm_counts.shape == sample_counts.shape
+        assert "sf" in sfs_df.columns
