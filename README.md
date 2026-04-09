@@ -1,6 +1,6 @@
-# zavolab_pyutils
-
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19483710.svg)](https://doi.org/10.5281/zenodo.19483710)
 ![Tests](https://github.com/zavolanlab/zavolab_pyutils/actions/workflows/python-app.yml/badge.svg)
+# zavolab_pyutils
 
 Genomic data analysis utilities from the Zavolan Lab. A collection of Python utilities for common bioinformatics tasks including library size normalization, annotation conversion, and other genomic data analysis operations.
 
