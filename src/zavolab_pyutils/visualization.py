@@ -465,9 +465,12 @@ def plot_mean_vs_cv(
 
 def plot_sanity_gene_expression_with_ci(
     sample_norm_df, means_df, errors_df, metadata_df, selected_genes, 
-    savefig_path, sample_col='sample', cond_col='condition', 
+    savefig_path, genes_df:pd.DataFrame=None, 
+    sample_col='sample', cond_col='condition', 
     condition_order=None,palette=None,
     CI_limit=0.95, adjust_multiple_comparisons=False,
+    mean_dot_size:float=6.0,sample_dot_size:float=4.0,
+    one_subplot_width:float=2.8, subplot_height:float=5.2
 ):
     """
     Plots Sanity log2 normalized counts with Bayesian CI error bars.
@@ -482,9 +485,19 @@ def plot_sanity_gene_expression_with_ci(
         List of genes to plot.
     savefig_path : str or pathlib.Path
         Output file path.
+    genes_df : pd.DataFrame, optional
+        DataFrame containing gene annotations. If provided, gene ids in the plot will be replaced with "gene_name". Default is None.
     adjust_multiple_comparisons : bool, optional
         If True, applies a Bonferroni correction to the CI width based on the 
         number of pairwise condition comparisons. Default is False.
+    mean_dot_size : float, optional
+        Size of the mean points in the plot. Default is 6.
+    sample_dot_size : float, optional
+        Size of the sample points in the plot. Default is 4.
+    one_subplot_width : float, optional
+        Width of a single subplot. Default is 2.8.
+    subplot_height : float, optional
+        Height of the subplot. Default is 5.2.
     """
     
     input_data_df = sample_norm_df.copy()
@@ -495,6 +508,7 @@ def plot_sanity_gene_expression_with_ci(
     melted = input_data_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
     melted = pd.melt(melted, id_vars=['gene_name'], var_name=sample_col, value_name='log2_expr')
     melted = pd.merge(metadata_df[[sample_col, cond_col]], melted, how='right', on=sample_col)
+    
     if condition_order is None:
         order = sorted(melted[cond_col].unique())
     else:
@@ -510,29 +524,37 @@ def plot_sanity_gene_expression_with_ci(
     z_score = stats.norm.ppf(1 - alpha_val / 2)
     
     sns.set(font_scale=1, style="white")
-    fig, axes = plt.subplots(1, len(common_genes), sharey=True, figsize=(2.8*len(common_genes), 5.2))
+    fig, axes = plt.subplots(1, len(common_genes), sharey=True, figsize=(one_subplot_width*len(common_genes), subplot_height))
     if len(common_genes) == 1: axes = [axes]
         
     for k, gene in enumerate(common_genes):
         ax = axes[k]
         gene_data = melted[melted['gene_name'] == gene]
+
+        if genes_df is not None and 'gene_id' in genes_df.columns and 'gene_name' in genes_df.columns:
+            gene_name_to_plot = genes_df.loc[genes_df['gene_id'] == gene, 'gene_name'].values[0]
+        else:
+            gene_name_to_plot = gene
+
         y_pos = np.arange(len(order))
-        
         log2_means = means_df.loc[gene, order].values
         err_margins = errors_df.loc[gene, order].values * z_score
         
-        cur_data_df = pd.DataFrame([log2_means,y_pos]).transpose()
-        cur_data_df.columns = ['x','y']
+        mean_data_df = pd.DataFrame([log2_means,order]).transpose()
+        mean_data_df.columns = ['log2_expr',cond_col]
 
-        ax = sns.scatterplot(data=cur_data_df, x='x', y='y', color=('grey' if palette is None else None), zorder=1, alpha=0.7,
-                             palette=palette)
+        ax = sns.pointplot(ax=ax, data=mean_data_df, x='log2_expr', y=cond_col, 
+                             markersize=mean_dot_size,palette=palette, order=order,
+                             color=('black' if palette is None else None), zorder=3, alpha=0.7,
+                                errorbar=None,
+                             )
         ax.errorbar(log2_means, y_pos, xerr=err_margins, fmt='o', color='black', capsize=4, zorder=2, markersize=0)
-        ax = sns.stripplot(
+        ax = sns.swarmplot(
             ax=ax, data=gene_data, x='log2_expr', y=cond_col, order=order, 
-            color='white', size=4, edgecolor='black', linewidth=1, alpha=0.5, zorder=3, jitter=True
+            color='grey', size=sample_dot_size, edgecolor='black', linewidth=1, alpha=0.5, zorder=1,
         )
         
-        ax.set(title=gene, ylabel='', xlabel='$log_2~expr$')
+        ax.set(title=gene_name_to_plot, ylabel='', xlabel='$log_2~expr$')
         ax.tick_params(left=True, bottom=True)
         if k > 0: ax.tick_params(left=False)
         
@@ -658,10 +680,13 @@ def plot_variance_vs_expression(means_df, vg_df, savefig_path, true_vg=None, yli
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
 
 def plot_sanity_relative_usage_with_ci(
-    norm_counts_df, variances_df, metadata_df, isoform_pairs, 
+    norm_counts_df, variances_df, metadata_df, isoform_pairs_df, 
     savefig_path, sample_col='sample', cond_col='condition', 
+    condition_order=None, palette=None,
     CI_limit=0.95, adjust_multiple_comparisons=False,
     log2_scale=True,
+    mean_dot_size:float=6.0, sample_dot_size:float=4.0,
+    one_subplot_width:float=2.8, subplot_height:float=5.2
 ):
     """
     Plots Sanity relative usage (ratio) of isoform pairs with Bayesian CI error bars.
@@ -674,14 +699,18 @@ def plot_sanity_relative_usage_with_ci(
         Cell-level log2 posterior variances (output from Sanity).
     metadata_df : pd.DataFrame
         Metadata mapping samples to conditions.
-    isoform_pairs : list of tuples
-        List of (Isoform_1_ID, Isoform_2_ID) to compare. (e.g., [('GeneX_Proximal', 'GeneX_Distal')])
+    isoform_pairs_df : pd.DataFrame
+        DataFrame containing 'isoform_numer' and 'isoform_denom' columns defining the numerator and denominator.
     savefig_path : str or pathlib.Path
         Output file path.
     sample_col : str, optional
         Column in metadata_df with sample IDs. Default is 'sample'.
     cond_col : str, optional
         Column in metadata_df with condition labels. Default is 'condition'.
+    condition_order : list, optional
+        Explicit list defining the order of conditions on the y-axis.
+    palette : str or dict, optional
+        Seaborn palette name or dictionary mapping conditions to colors.
     CI_limit : float, optional
         Confidence interval limit (e.g., 0.95 for 95% CI). Default is 0.95.
     adjust_multiple_comparisons : bool, optional
@@ -690,9 +719,24 @@ def plot_sanity_relative_usage_with_ci(
     log2_scale : bool, optional
         If True (default), plots values on the log2 scale. 
         If False, values and error bars are exponentiated to the natural ratio scale.
+    mean_dot_size : float, optional
+        Size of the mean points in the plot. Default is 6.0.
+    sample_dot_size : float, optional
+        Size of the sample points in the plot. Default is 4.0.
+    one_subplot_width : float, optional
+        Width of a single subplot. Default is 2.8.
+    subplot_height : float, optional
+        Height of the subplot. Default is 5.2.
     """
+    if 'isoform_numer' not in isoform_pairs_df.columns or 'isoform_denom' not in isoform_pairs_df.columns:
+        raise ValueError("isoform_pairs_df must contain 'isoform_numer' and 'isoform_denom' columns.")
+
     sample_map = metadata_df.set_index(sample_col)[cond_col]
-    order = sorted(sample_map.dropna().unique())
+    
+    if condition_order is None:
+        order = sorted(sample_map.dropna().unique())
+    else:
+        order = condition_order
     n_conditions = len(order)
     
     # Calculate Alpha with optional Bonferroni correction
@@ -707,7 +751,7 @@ def plot_sanity_relative_usage_with_ci(
     
     # Filter valid pairs to ensure both isoforms exist in the count matrix
     valid_pairs = []
-    for iso1, iso2 in isoform_pairs:
+    for iso1, iso2 in zip(isoform_pairs_df['isoform_numer'], isoform_pairs_df['isoform_denom']):
         if iso1 in norm_counts_df.index and iso2 in norm_counts_df.index:
             valid_pairs.append((iso1, iso2))
         else:
@@ -718,7 +762,7 @@ def plot_sanity_relative_usage_with_ci(
         return
         
     # Set up matplotlib figure dimensions
-    fig, axes = plt.subplots(1, len(valid_pairs), sharey=True, figsize=(2.8*len(valid_pairs), 5.2))
+    fig, axes = plt.subplots(1, len(valid_pairs), sharey=True, figsize=(one_subplot_width * len(valid_pairs), subplot_height))
     if len(valid_pairs) == 1: 
         axes = [axes]
         
@@ -730,7 +774,7 @@ def plot_sanity_relative_usage_with_ci(
         log2_ratio_cells = norm_counts_df.loc[iso1] - norm_counts_df.loc[iso2]
         var_ratio_cells = variances_df.loc[iso1] + variances_df.loc[iso2]
         
-        # Prepare data for seaborn stripplot
+        # Prepare data for seaborn
         pair_data = pd.DataFrame({
             sample_col: log2_ratio_cells.index,
             'log2_ratio': log2_ratio_cells.values
@@ -766,14 +810,14 @@ def plot_sanity_relative_usage_with_ci(
         log2_means = np.array(log2_means)
         err_margins = np.array(err_margins)
         
-        # --- NEW LOGIC: Adjust for scale ---
+        # --- Adjust for scale ---
         if log2_scale:
             plot_means = log2_means
             xerr = err_margins
             x_col = 'log2_ratio'
             x_label = '$log_2$(rel. usage ratio)'
         else:
-            # Exponentiate the raw cell data for the stripplot
+            # Exponentiate the raw cell data for the swarmplot
             pair_data['natural_ratio'] = 2 ** pair_data['log2_ratio']
             x_col = 'natural_ratio'
             x_label = 'Relative usage ratio'
@@ -789,19 +833,34 @@ def plot_sanity_relative_usage_with_ci(
                 upper_bounds - plot_means
             ])
             
+        # Construct DataFrame for the pointplot
+        mean_data_df = pd.DataFrame({x_col: plot_means, cond_col: order})
+            
         # 3. Plotting
-        # Draw the lines connecting condition means
-        ax.plot(plot_means, y_pos, color='grey', zorder=1, alpha=0.7)
-        
-        # Draw the error bars representing the Bayesian Confidence Intervals
-        ax.errorbar(plot_means, y_pos, xerr=xerr, fmt='o', color='black', capsize=4, zorder=2, markersize=5)
-        
-        # Overlay the individual cell points
-        sns.stripplot(
-            ax=ax, data=pair_data, x=x_col, y=cond_col, order=order, 
-            color='white', size=4, edgecolor='black', linewidth=1, alpha=0.5, zorder=3, jitter=True
+        # Draw the lines connecting condition means with pointplot
+        ax = sns.pointplot(
+            ax=ax, data=mean_data_df, x=x_col, y=cond_col, 
+            markersize=mean_dot_size, palette=palette, order=order,
+            color=('black' if palette is None else None), zorder=3, alpha=0.7,
+            errorbar=None
         )
         
+        # Draw the error bars representing the Bayesian Confidence Intervals
+        # Note: markersize=0 so we don't draw over the pointplot marker
+        ax.errorbar(plot_means, y_pos, xerr=xerr, fmt='o', color='black', capsize=4, zorder=2, markersize=0)
+        
+        # Overlay the individual cell points using swarmplot
+        ax = sns.swarmplot(
+            ax=ax, data=pair_data, x=x_col, y=cond_col, order=order, 
+            color='grey', size=sample_dot_size, edgecolor='black', linewidth=1, alpha=0.5, zorder=1
+        )
+        
+        # Define title if isoform names are present in the dataframe
+        if 'isoform_name' in isoform_pairs_df.columns:
+            pair_name = isoform_pairs_df.loc[
+                (isoform_pairs_df['isoform_numer'] == iso1) & (isoform_pairs_df['isoform_denom'] == iso2)
+            ]['isoform_name'].values[0]
+
         # Formatting
         ax.set(title=pair_name, ylabel='', xlabel=x_label)
         ax.tick_params(left=True, bottom=True)
