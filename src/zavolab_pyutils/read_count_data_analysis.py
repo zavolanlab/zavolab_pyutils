@@ -554,7 +554,7 @@ def test_differential_expression(means_df, errors_df, cond_A, cond_B):
     return res_df
 
 ####
-# Note: The full Bayesian Sanity implementation is more computationally intensive than the original point-estimate version.
+# Note: The full Bayesian Sanity implementation is more computationally intensive than the point-estimate version.
 # It integrates over a grid of variance values to compute marginalized posteriors
 ####
 

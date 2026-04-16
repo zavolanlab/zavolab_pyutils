@@ -7,6 +7,7 @@ import os
 import numpy as np
 from adjustText import adjust_text
 from scipy import stats
+import time
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
@@ -96,6 +97,9 @@ def pca_plot(
     highlight_samples_list=None,
     calculate_permanova_R2=False,
     add_2D_KDE_countours=False,
+    add_text_labels_for_samples=False,
+    text_label_column_for_samples=None,
+    text_label_size_for_samples=8,
     bw_adjust=1.75,alpha_param=0.9, s_param=10,figsize=(5.2,5.2),legend_markerscale=1.5):
     """
     Performs Principal Component Analysis (PCA) and generates a customized 2D scatter plot.
@@ -129,7 +133,14 @@ def pca_plot(
     calculate_permanova_R2 : bool, optional
         If True, calculates and displays the PERMANOVA R2 values in the plot title 
         (both for the full scaled dataset and the 2D PCA projection). Default is False.
-
+    add_2D_KDE_countours : bool, optional
+        If True, adds 2D KDE contours for each category in the hue feature. Default is False.
+    add_text_labels_for_samples : bool, optional
+        If True, adds text labels for each sample point in the plot. Default is False.
+    text_label_column_for_samples : str, optional
+        The column name in `metadata_df` to use for text labels when `add_text_labels_for_samples` is True. Default is None.
+    text_label_size_for_samples : int, optional
+        Font size for the sample text labels. Default is 8.
     Returns
     -------
     None
@@ -217,6 +228,18 @@ def pca_plot(
                 bw_adjust=bw_adjust,
                 color=palette[k])
             k = k + 1
+    if add_text_labels_for_samples:
+        texts = []
+        for index, row in principalDf.iterrows():
+            texts.append(
+                ax.annotate(
+                    xy=(row[x_feature], row[y_feature]),
+                    text=row[text_label_column_for_samples],
+                    size=text_label_size_for_samples,
+                    ha="left",
+                )
+            )
+        adjust_text(texts,arrowprops=dict(arrowstyle='-', color='black'),ax=ax,force_points=(5,5))
 
     ax.set(
         xlabel="PC1, "

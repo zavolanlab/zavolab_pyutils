@@ -21,7 +21,12 @@ def check_bedtools_installed():
             "(e.g., 'conda install -c bioconda bedtools' or 'sudo apt install bedtools')."
         )
 
-def parse_gtf_attributes_into_pd_dataframes(gtf_file,input_skiprows=5) -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
+def parse_gtf_attributes_into_pd_dataframes(gtf_file,
+                                            input_skiprows=5,
+                                            gene_type_field='gene_type',
+                                            extract_exon_number=True,
+                                            extract_gene_name_in_exons=True,
+                                            verbose=False) -> (pd.DataFrame, pd.DataFrame, pd.DataFrame):
     """
     Get full gtf, exons, and genes from a GTF annotation file.
     
@@ -31,6 +36,12 @@ def parse_gtf_attributes_into_pd_dataframes(gtf_file,input_skiprows=5) -> (pd.Da
         Path to input GTF file.
     input_skiprows : int, optional
         Number of header lines to skip in the GTF file. Default is 5 (compatible with GENCODE GTF files).
+    gene_type_field : str, optional
+        The field name for gene type in the GTF file. Default is 'gene_type'.
+    extract_exon_number : bool, optional
+        Whether to extract exon_number from the GTF attributes. Default is True.
+    extract_gene_name_in_exons : bool, optional
+        Whether to extract gene_name from the GTF attributes in exon entries. Default is True.
     Returns
     -------
     gtf_df : pd.DataFrame
@@ -46,18 +57,38 @@ def parse_gtf_attributes_into_pd_dataframes(gtf_file,input_skiprows=5) -> (pd.Da
 
     # extract gene-level information
     genes = gtf_df.loc[gtf_df[2]=='gene'].reset_index(drop=True)
-    genes['gene_type'] = genes[8].str.split('gene_type "',expand=True)[1].str.split('";',expand=True)[0]
-    genes['gene_name'] = genes[8].str.split('gene_name "',expand=True)[1].str.split('";',expand=True)[0]
-    genes['gene_id'] = genes[8].str.split('gene_id "',expand=True)[1].str.split('";',expand=True)[0]
+    genes['gene_type'] = genes[8].str.split(gene_type_field+' "',expand=True)[1].str.split('"',expand=True)[0]
+    genes['gene_name'] = genes[8].str.split('gene_name "',expand=True)[1].str.split('"',expand=True)[0]
+    genes['gene_id'] = genes[8].str.split('gene_id "',expand=True)[1].str.split('"',expand=True)[0]
     print(f"Extracted gene-level information for {len(genes)} genes.")
 
     # extract exon-level information
     exons = gtf_df.loc[gtf_df[2]=='exon'].reset_index(drop=True)
-    exons['gene_type'] = exons[8].str.split('gene_type "',expand=True)[1].str.split('";',expand=True)[0]
-    exons['transcript_id'] = exons[8].str.split('transcript_id "',expand=True)[1].str.split('";',expand=True)[0]
-    exons['gene_id'] = exons[8].str.split('gene_id "',expand=True)[1].str.split('";',expand=True)[0]
-    exons['gene_name'] = exons[8].str.split('gene_name "',expand=True)[1].str.split('";',expand=True)[0]
-    exons['exon_number'] = exons[8].str.split('exon_number ',expand=True)[1].str.split(';',expand=True)[0].str.replace('"','').astype('int')
+    if verbose:
+        print(f"extracted {len(exons)} exon elements in the provided gtf_df dataframe. Will exctract gene_type\n")
+    exons['gene_type'] = exons[8].str.split(gene_type_field+' "',expand=True)[1].str.split('"',expand=True)[0]
+    if verbose:
+        print(f"extracted gene_type of exon elements in the provided gtf_df dataframe. Will exctract transcript_id\n")
+    exons['transcript_id'] = exons[8].str.split('transcript_id "',expand=True)[1].str.split('"',expand=True)[0]
+    if verbose:
+        print(f"extracted transcript_id of exon elements in the provided gtf_df dataframe. Will exctract gene_id\n")
+    exons['gene_id'] = exons[8].str.split('gene_id "',expand=True)[1].str.split('"',expand=True)[0]
+    if verbose:
+        print(f"extracted gene_id of exon elements in the provided gtf_df dataframe.\n")
+    if extract_gene_name_in_exons:
+        if verbose:
+            print(f"Will extract gene_name of exon elements in the provided gtf_df dataframe.\n")
+        exons['gene_name'] = exons[8].str.split('gene_name "',expand=True)[1].str.split('"',expand=True)[0]
+        if verbose:
+            print(f"extracted gene_name of exon elements in the provided gtf_df dataframe.\n")
+    if extract_exon_number:
+        if verbose:
+            print(f"Will extract exon_number of exon elements in the provided gtf_df dataframe.\n")
+        exons['exon_number'] = exons[8].str.split('exon_number ',expand=True)[1].str.split(';',expand=True)[0].str.replace('"','').astype('int')
+        if verbose:
+            print(f"extracted exon_number of exon elements in the provided gtf_df dataframe.\n")
+    if verbose:
+        print(f"Will extract total number of exons in the transcripts (column 't') in the provided gtf_df dataframe.\n")
     exons['t']=1
     exons = pd.merge(exons.drop(['t'],axis=1),
                      exons.groupby('transcript_id').agg({'t':sum}).reset_index(),how='inner',on='transcript_id')
@@ -375,7 +406,60 @@ def get_GTF_for_gene_expression_analysis(
     print("Final gtf file written to "+out_gtf_path+"\n")
     return gene_expression_gtf
 
+def extract_exonic_segments_from_gtfDF_and_make_bed(
+        gtf_df:pd.DataFrame,
+        out_bed_path: str,
+        temp_dir=None
+) -> pd.DataFrame:
+    """
+    Get full exons in .bed format and write them to a file
+    
+    Parameters
+    ----------
+    gtf_df : pd.DataFrame
+        pandas DataFrame from a GTF file.
+        The output of `parse_gtf_attributes_into_pd_dataframes()` can be used as input for this function.
+    out_bed_path : str
+        Path to output BED file that will be written with the selected exons.
+    temp_dir : str, optional
+        Path to temporary directory for intermediate files. 
+        If None, a 'temp' directory will be created in the current working directory or $TMPDIR environment variable if present. Default is None. 
+    
+    Returns
+    -------
+    ann_exons_df : pd.DataFrame
+        bed-formatted DataFrame containing annotated exons with columns ['chr', 'start', 'end', 'name', 'score', 'strand'].
+    Notes
+    -----
+    """ 
+    check_bedtools_installed() # Fail fast with a helpful error message if bedtools is not available
+    # Create temporary directory if not provided
+    if temp_dir is None:
+        temp_dir = os.getenv('TMPDIR', default='./temp/')  # Use environment variable for temporary directory or fallback to './temp/'
+        os.makedirs(temp_dir, exist_ok=True)
+    else:
+        os.makedirs(temp_dir, exist_ok=True)
+    print(f"Checked bedtools installation and created temporary directory at {temp_dir}...\n")
+    
+    ann_exons_df = gtf_df.loc[gtf_df[2]=='exon'].reset_index(drop=True)
+    print(f"Start with {len(ann_exons_df)} exons in the provided gtf_df dataframe.\n")
+    # just get unique exons based on genomic coordinates and strand, 
+    # ignoring transcript_id and gene_id (there can be multiple transcripts with the same exon)
+    ann_exons_df = ann_exons_df[[0,3,4,6]].drop_duplicates().reset_index(drop=True) 
+    print(f"Identified {len(ann_exons_df)} unique exonic segements.\n")
+    
+    ann_exons_df['name'] = ann_exons_df.index # just add arbitrary integer name for each exon, since bed format requires a name column
+    ann_exons_df['start'] = ann_exons_df[3]-1
+    ann_exons_df['score'] = 0 # also arbitrary score column, since bed format requires a score column
+    
+    nonsorted_SEGMENTS_bed = os.path.join(temp_dir, 'ann_exons_df.bed')
+    ann_exons_df[[0,'start',4,'name','score',6]].to_csv(nonsorted_SEGMENTS_bed, sep=str('\t'),header=False,index=None,quoting=csv.QUOTE_NONE)
 
+    Path(out_bed_path).parent.mkdir(parents=True, exist_ok=True)
+    command = 'bedtools sort -i '+nonsorted_SEGMENTS_bed+' > '+out_bed_path
+    out = subprocess.check_output(command, shell=True)
+    print(f"successfully wrote BED file with {len(ann_exons_df)} exonic elements to {out_bed_path}\n")
+    return ann_exons_df
 
 def convert_gff_to_gtf(gff_file, gtf_file):
     """
