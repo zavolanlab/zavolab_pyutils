@@ -18,7 +18,7 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 ### Developer Setup from source, with conda environment
 
 ```bash
-git clone https://github.com/zavolab/zavolab_pyutils.git
+git clone https://github.com/zavolanlab/zavolab_pyutils.git
 cd zavolab_pyutils
 conda env create --file=environment.yml
 conda activate zavolab_pyutils

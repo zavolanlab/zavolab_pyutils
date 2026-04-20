@@ -48,6 +48,9 @@ dev = [
     "mypy>=0.950",
 ]
 
+[project.scripts]
+redefine_qual_and_NHtag = "zavolab_pyutils.redefine_qual_and_NHtag:main"
+
 [project.urls]
 Homepage = "https://github.com/zavolanlab/zavolab_pyutils"
 Documentation = "https://github.com/zavolanlab/zavolab_pyutils#readme"
