@@ -25,14 +25,29 @@ def write_to_new_bam(cur_alignment_list, cur_NH, bam_writer, change_MAPQ, MAPQ_U
     for alignment in cur_alignment_list:
         if MAPQ is not None:
             alignment.aQual = MAPQ
-        alignment.optional_fields = [(('NH', cur_NH) if elem[0] == 'NH' else elem) for elem in alignment.optional_fields]
+            
+        # Safely update existing NH tag, or append it if it doesn't exist
+        nh_found = False
+        updated_fields = []
+        for tag in alignment.optional_fields:
+            if tag[0] == 'NH':
+                updated_fields.append(('NH', cur_NH))
+                nh_found = True
+            else:
+                updated_fields.append(tag)
+        
+        # If the NH tag wasn't in the original alignments (e.g., from minimap2), add it now
+        if not nh_found:
+            updated_fields.append(('NH', cur_NH))
+            
+        alignment.optional_fields = updated_fields
         bam_writer.write(alignment)
 
 def main():
-    """ Parse dirty bam file and redefine correctly the quality string and NH tag value """
+    """ Parse dirty bam file and redefine correctly the quality string and NH tag value. Assumes that the input bam file is sorted by read name! """
     parser = ArgumentParser(description=main.__doc__, formatter_class=RawTextHelpFormatter)
 
-    parser.add_argument("--input_bam_file", dest="input_bam_file", help="Path to the bam file", required=True, metavar="FILE")
+    parser.add_argument("--input_bam_file", dest="input_bam_file", help="Path to the READ NAME - SORTED bam file.", required=True, metavar="FILE")
     parser.add_argument("--out_bam_file", dest="out_bam_file", help="Path to the output bam file", required=True, metavar="FILE")
     parser.add_argument("--skip_MAPQ_change", dest="change_MAPQ", action="store_false", help="Flag to prevent changing MAPQ values (By default, MAPQ is changed)")
     parser.add_argument("--MAPQ_UM", dest="MAPQ_UM", help="MAPQ value for uniquely mapped reads", metavar="INT", type=int, default=255)
