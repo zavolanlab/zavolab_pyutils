@@ -11,8 +11,8 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 - **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on pySanity outputs or Quantile regression
 - **Visualization of isoform relative usage levels across conditions for selected isoforms**: confidence interval plotting based on pySanity outputs
 - **Differential expression and differential usage analysis**: based on pySanity outputs
-- **Annotation Conversion and Processing**: Convert between GTF and GFF3 formats, extract terminal exons from annotation etc
-
+- **Annotation Conversion and Processing**: Convert between GTF and GFF3 formats, extract terminal exons from annotation etc.
+- **CLI pythonic functions** used in various Snakemake/Nextflow pipelines of the Zavolan lab.
 ## Installation
 
 ### Developer Setup from source, with conda environment

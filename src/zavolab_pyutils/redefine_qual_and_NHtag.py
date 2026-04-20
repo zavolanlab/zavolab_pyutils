@@ -34,9 +34,9 @@ def main():
 
     parser.add_argument("--input_bam_file", dest="input_bam_file", help="Path to the bam file", required=True, metavar="FILE")
     parser.add_argument("--out_bam_file", dest="out_bam_file", help="Path to the output bam file", required=True, metavar="FILE")
-    parser.add_argument("--change_MAPQ", dest="change_MAPQ", help="whether to change MAPQ values depending on NH tag", required=True, metavar="bool", type=bool, default=True)
-    parser.add_argument("--MAPQ_UM", dest="MAPQ_UM", help="MAPQ value for uniquely mapped reads", required=True, metavar="INT", type=int, default=255)
-    parser.add_argument("--MAPQ_MM", dest="MAPQ_MM", help="MAPQ value for multi-mapped reads", required=True, metavar="INT", type=int, default=0)    
+    parser.add_argument("--skip_MAPQ_change", dest="change_MAPQ", action="store_false", help="Flag to prevent changing MAPQ values (By default, MAPQ is changed)")
+    parser.add_argument("--MAPQ_UM", dest="MAPQ_UM", help="MAPQ value for uniquely mapped reads", metavar="INT", type=int, default=255)
+    parser.add_argument("--MAPQ_MM", dest="MAPQ_MM", help="MAPQ value for multi-mapped reads", metavar="INT", type=int, default=0)    
     
     try:
         options = parser.parse_args()
