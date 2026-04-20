@@ -36,6 +36,8 @@ dependencies = [
     "ruamel.yaml>=0.19.0",
     "nbstripout>=0.8.1",
     "tomli-w>=1.2.0",
+    "pysam",
+    "HTSeq",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +52,7 @@ dev = [
 
 [project.scripts]
 redefine_qual_and_NHtag = "zavolab_pyutils.redefine_qual_and_NHtag:main"
+normalize_umi_lengths = "zavolab_pyutils.normalize_umi_lengths:main"
 
 [project.urls]
 Homepage = "https://github.com/zavolanlab/zavolab_pyutils"
