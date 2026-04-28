@@ -145,7 +145,7 @@ def plot_cs_motifs():
         # Calculate proportion of sites having exactly K occurrences
         count_props = df_counts.groupby(['motif', 'count']).size() / total_sites
         count_props = count_props.reset_index(name='proportion')
-        sns.barplot(data=count_props, x='count', y='proportion', hue='motif')
+        sns.barplot(data=count_props, x='count', y='proportion', hue='motif', hue_order=[m for m in args.motifs], palette = sns.color_palette("tab20"))
         plt.title(f"Motif Occurrences per Window\n(Bin {current_bin+1}, n={total_sites})")
         plt.xlabel("Number of occurrences in window")
         plt.ylabel("Proportion of sites")
@@ -175,7 +175,7 @@ def plot_cs_motifs():
             
             df_plot = pd.DataFrame(freq_data)
             plt.figure(figsize=(10, 5))
-            sns.lineplot(data=df_plot, x='rel_pos', y='freq', hue='motif', drawstyle='steps-mid')
+            sns.lineplot(data=df_plot, x='rel_pos', y='freq', hue='motif', drawstyle='steps-mid', hue_order=[m for m in args.motifs], palette = sns.color_palette("tab20"))
             plt.axvline(0, color='black', linestyle='--', alpha=0.5, label='Cleavage Site')
             plt.title(f"Positional Frequency of Motifs ({title_cond})\nBin {current_bin+1}")
             plt.xlabel(f"Position relative to the site ({args.anchor})")
