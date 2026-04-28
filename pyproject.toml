@@ -39,6 +39,7 @@ dependencies = [
     "pysam",
     "HTSeq",
     "biopython",
+    "pyBigWig"
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,7 @@ dev = [
 [project.scripts]
 redefine_qual_and_NHtag = "zavolab_pyutils.redefine_qual_and_NHtag:main"
 normalize_umi_lengths = "zavolab_pyutils.normalize_umi_lengths:main"
+plot_cs_motifs = "zavolab_pyutils.motif_metaplot:plot_cs_motifs"
 
 [project.urls]
 Homepage = "https://github.com/zavolanlab/zavolab_pyutils"
