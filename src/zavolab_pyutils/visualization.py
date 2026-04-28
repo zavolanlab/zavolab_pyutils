@@ -96,6 +96,7 @@ def pca_plot(
     legend_title="",
     highlight_samples_list=None,
     calculate_permanova_R2=False,
+    permanova_R2_ajusted = True,
     add_2D_KDE_countours=False,
     add_text_labels_for_samples=False,
     text_label_column_for_samples=None,
@@ -133,6 +134,8 @@ def pca_plot(
     calculate_permanova_R2 : bool, optional
         If True, calculates and displays the PERMANOVA R2 values in the plot title 
         (both for the full scaled dataset and the 2D PCA projection). Default is False.
+    permanova_R2_ajusted : bool, optional
+        If true, calculated R2adj,otherwise standard R2. Default is True.
     add_2D_KDE_countours : bool, optional
         If True, adds 2D KDE contours for each category in the hue feature. Default is False.
     add_text_labels_for_samples : bool, optional
@@ -174,8 +177,8 @@ def pca_plot(
     palette = list(sns.color_palette(sns_color_palette, len(hue_order)))
 
     if calculate_permanova_R2 and len(hue_order) > 1:
-        R2_AllGenes = np.round(get_MultiDimR2(x,list(principalDf[hue]),True),2)
-        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,list(principalDf[hue]),True),2)
+        R2_AllGenes = np.round(get_MultiDimR2(x,list(principalDf[hue]),permanova_R2_ajusted),2)
+        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,list(principalDf[hue]),permanova_R2_ajusted),2)
 
     ###
     # PCA-only

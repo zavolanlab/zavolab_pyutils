@@ -15,9 +15,8 @@ from .read_count_data_analysis import (
 )
 
 from .annotation import (
-    convert_gff_to_gtf, 
-    convert_gtf_to_gff, 
-    parse_gtf_attributes
+    parse_gtf_attributes_into_pd_dataframes, 
+    genbank_to_fasta_and_gtf, 
 )
 
 from .visualization import (

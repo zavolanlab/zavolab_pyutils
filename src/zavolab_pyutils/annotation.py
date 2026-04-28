@@ -10,6 +10,10 @@ import pandas as pd
 import numpy as np
 import subprocess
 
+import argparse
+import sys
+from Bio import SeqIO
+
 def check_bedtools_installed():
     """Validates that the bedtools binary is accessible in the system PATH."""
     try:
@@ -461,67 +465,87 @@ def extract_exonic_segments_from_gtfDF_and_make_bed(
     print(f"successfully wrote BED file with {len(ann_exons_df)} exonic elements to {out_bed_path}\n")
     return ann_exons_df
 
-def convert_gff_to_gtf(gff_file, gtf_file):
+def genbank_to_fasta_and_gtf(input_gb_file_path:str, 
+                             out_fasta_file_path:str, 
+                             out_gtf_file_path:str,
+                             chromosome_name:str=None):
     """
-    Convert GFF format annotation file to GTF format.
-    
+    Parses a GenBank file and exports its sequence to a FASTA file
+    and its features to a GTF file.
     Parameters
     ----------
-    gff_file : str
-        Path to input GFF file.
-    gtf_file : str
+    input_gb_file_path : str
+        Path to input GenBank file.
+    out_fasta_file_path : str
+        Path to output FASTA file.
+    out_gtf_file_path : str
         Path to output GTF file.
-    
+    chromosome_name : str, optional
+        Optional name for the chromosome/sequence in the output files. If not provided, the GenBank record ID will be used as the chromosome name.
     Returns
     -------
-    None
-    
     Notes
     -----
-    This function handles GFF3 to GTF format conversion, standardizing
-    the attribute column format and adjusting coordinate systems as needed.
     """
-    # Placeholder implementation
-    raise NotImplementedError("convert_gff_to_gtf is currently under development.")
-
-
-def convert_gtf_to_gff(gtf_file, gff_file):
-    """
-    Convert GTF format annotation file to GFF3 format.
-    
-    Parameters
-    ----------
-    gtf_file : str
-        Path to input GTF file.
-    gff_file : str
-        Path to output GFF3 file.
-    
-    Returns
-    -------
-    None
-    
-    Notes
-    -----
-    This function handles GTF to GFF3 format conversion, standardizing
-    the attribute column format.
-    """
-    # Placeholder implementation
-    raise NotImplementedError("convert_gtf_to_gff is currently under development.")
-
-
-def parse_gtf_attributes(attribute_string):
-    """
-    Parse GTF/GFF attribute column into a dictionary.
-    
-    Parameters
-    ----------
-    attribute_string : str
-        The attribute column from a GTF/GFF file.
-    
-    Returns
-    -------
-    dict
-        Parsed attributes as key-value pairs.
-    """
-    # Placeholder implementation
-    raise NotImplementedError("parse_gtf_attributes is currently under development.")
+    with open(out_fasta_file_path, "w") as out_fasta, open(out_gtf_file_path, "w") as out_gtf:
+        # Parse GenBank records
+        for record in SeqIO.parse(input_gb_file_path, "genbank"):
+            
+            # Use provided chromosome name, otherwise fallback to GenBank record ID
+            seq_id = chromosome_name if chromosome_name else record.id
+            
+            # 1. Write Sequence to FASTA
+            out_fasta.write(f">{seq_id} {record.description}\n")
+            seq = str(record.seq)
+            # Wrap FASTA sequence to 80 characters per line
+            for i in range(0, len(seq), 80):
+                out_fasta.write(f"{seq[i:i+80]}\n")
+            
+            # 2. Write Features to GTF
+            for feature in record.features:
+                # Skip the 'source' feature (it spans the entire sequence length)
+                if feature.type == "source":
+                    continue
+                
+                attributes = []
+                
+                # Standardize GTF mandatory attributes: gene_id and transcript_id
+                gene_id = None
+                if "gene" in feature.qualifiers:
+                    gene_id = feature.qualifiers["gene"][0]
+                elif "locus_tag" in feature.qualifiers:
+                    gene_id = feature.qualifiers["locus_tag"][0]
+                else:
+                    gene_id = f"{feature.type}_{feature.location.start+1}_{feature.location.end}"
+                attributes.append(f'gene_id "{gene_id}"')
+                
+                transcript_id = None
+                if "transcript_id" in feature.qualifiers:
+                    transcript_id = feature.qualifiers["transcript_id"][0]
+                else:
+                    transcript_id = gene_id
+                attributes.append(f'transcript_id "{transcript_id}"')
+                
+                # Append all other qualifiers as GTF attributes
+                for key, values in feature.qualifiers.items():
+                    if key not in ["gene", "locus_tag", "transcript_id"]:
+                        # GTF attributes must be double-quoted; escape internal quotes
+                        val = str(values[0]).replace('"', '\\"')
+                        attributes.append(f'{key} "{val}"')
+                        
+                attr_str = "; ".join(attributes) + ";"
+                
+                # Handle multi-part locations (e.g. joined exons/CDS)
+                parts = feature.location.parts if hasattr(feature.location, "parts") else [feature.location]
+                
+                for loc in parts:
+                    # Biopython uses 0-based start (inclusive) and 0-based end (exclusive).
+                    # GTF requires 1-based start (inclusive) and 1-based end (inclusive).
+                    start = loc.start + 1
+                    end = int(loc.end)
+                    
+                    strand_map = {1: '+', -1: '-', 0: '.', None: '.'}
+                    strand = strand_map.get(loc.strand, '.')
+                    
+                    # Write GTF line: seqname source feature start end score strand frame attribute
+                    out_gtf.write(f"{seq_id}\tGenBank\t{feature.type}\t{start}\t{end}\t.\t{strand}\t.\t{attr_str}\n")
