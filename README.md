@@ -7,6 +7,7 @@ Genomic data analysis utilities from the Zavolan Lab. A collection of Python uti
 ## Features
 
 - **Library Size Normalization**: [Deseq2-like](https://pubmed.ncbi.nlm.nih.gov/25516281/) normalization, [Sanity-like](https://pubmed.ncbi.nlm.nih.gov/33927416/) normalization, termed **pySanity**
+- **fracSanity**: pySanity-based modelling of the RNA-seq-like data consisting of pull-down (sub-cellular fraction) and total fractions, and two conditions (for simlicity referred to as UT and Stress)
 - **Mean-Variance Modeling**: Condition-specific overdispersion estimation for RNA-seq counts using Quantile Regression
 - **Visualization of expression levels across conditions for selected genes**: confidence interval plotting based on pySanity outputs or Quantile regression
 - **Visualization of isoform relative usage levels across conditions for selected isoforms**: confidence interval plotting based on pySanity outputs

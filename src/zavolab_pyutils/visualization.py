@@ -896,3 +896,65 @@ def plot_sanity_relative_usage_with_ci(
     # Save the figure
     Path(savefig_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+
+def plot_frac_sanity_recruitment_with_ci(
+    results_df: pd.DataFrame, 
+    selected_genes: list, 
+    savefig_path: str,
+    CI_limit=0.95,
+    mean_dot_size: float = 6.0,
+    one_subplot_width: float = 2.8, 
+    subplot_height: float = 5.2
+):
+    """
+    Plots fracSanity log2(alpha) (recruitment fraction) with Bayesian CI error bars.
+    """
+    common_genes = [g for g in selected_genes if g in results_df['gene_id'].values]
+    if not common_genes:
+        print("No valid genes found.")
+        return
+
+    alpha_val = 1.0 - CI_limit
+    z_score = stats.norm.ppf(1 - alpha_val / 2)
+    
+    sns.set(font_scale=1, style="white")
+    fig, axes = plt.subplots(1, len(common_genes), sharey=True, 
+                             figsize=(one_subplot_width * len(common_genes), subplot_height))
+    if len(common_genes) == 1: 
+        axes = [axes]
+        
+    conditions = ['UT', 'Stress']
+    y_pos = np.arange(len(conditions))
+    
+    for k, gene in enumerate(common_genes):
+        ax = axes[k]
+        gene_data = results_df[results_df['gene_id'] == gene].iloc[0]
+        
+        log2_means = np.array([gene_data['log2_alpha_UT'], gene_data['log2_alpha_Stress']])
+        
+        # The variance of log2_alpha is V_g (since F is treated as a constant here)
+        # Note: You will need to pass var_D_ut and var_D_stress in the dataframe for this
+        err_margins = np.array([np.sqrt(gene_data['var_D_UT']), 
+                                np.sqrt(gene_data['var_D_Stress'])]) * z_score
+        
+        # Plot lines
+        ax.plot(log2_means, y_pos, color='grey', zorder=1, alpha=0.7)
+        # Plot error bars
+        ax.errorbar(log2_means, y_pos, xerr=err_margins, fmt='o', color='black', 
+                    capsize=4, zorder=2, markersize=mean_dot_size)
+        
+        ax.set(title=gene, ylabel='', xlabel=r'$\log_2(\alpha)$ (Recruitment)')
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(conditions)
+        
+        ax.tick_params(left=True, bottom=True)
+        if k > 0: 
+            ax.tick_params(left=False)
+            
+    fig.tight_layout()
+    fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+    plt.close(fig)
