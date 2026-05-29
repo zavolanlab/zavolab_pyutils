@@ -309,3 +309,122 @@ def simulate_isoform_negative_binomial_counts(
     iso_counts_df = pd.DataFrame(iso_counts_dict, index=samples).transpose()
     
     return iso_counts_df, metadata_df, isoform_to_gene, diff_genes
+
+###
+# for fracSanity model
+###
+
+def simulate_fractional_counts(
+    N_genes=3000, 
+    conditions=["UT", "Stress"], 
+    n_replicates=3, 
+    v_log=0.05, 
+    seed=42, 
+    SF_sigma=0.3, 
+    exp_average_M=4.0, 
+    exp_average_S=1.5, # Lowered to prevent mass domination by a single gene
+    beta_params_cond1=(1.0, 19.0), 
+    beta_params_cond2=(2.0, 18.0),
+    spiked_indices=None,
+    spike_multiplier=6.0
+):
+    """
+    Simulates paired Total and Pull-Down RNA-seq counts using a Poisson-LogNormal mixture.
+    Mimics the exact generative assumptions of the Sanity Bayesian model while preserving
+    the physical sub-fraction relationship P_g = alpha_g * T_g.
+    """
+    np.random.seed(seed)
+    
+    # 1. Setup Samples, Metadata, and Library Scaling Factors
+    samples = []
+    metadata_list = []
+    scaling_factors = []
+    
+    for cond in conditions:
+        for rep in range(1, n_replicates + 1):
+            # Total sample
+            samp_tot = f"{cond}_Total_rep{rep}"
+            samples.append(samp_tot)
+            metadata_list.append({
+                "sample": samp_tot, "condition": cond, 
+                "fraction": "Total", "replicate": rep, 
+                "sanity_group": f"{cond}_Total"
+            })
+            scaling_factors.append(np.exp(np.random.normal(0, SF_sigma)))
+            
+            # PD sample
+            samp_pd = f"{cond}_PD_rep{rep}"
+            samples.append(samp_pd)
+            metadata_list.append({
+                "sample": samp_pd, "condition": cond, 
+                "fraction": "PD", "replicate": rep, 
+                "sanity_group": f"{cond}_PD"
+            })
+            scaling_factors.append(np.exp(np.random.normal(0, SF_sigma)))
+            
+    metadata_df = pd.DataFrame(metadata_list)
+    
+    # 2. Base absolute expression (T_base)
+    exp_average_vals = np.random.lognormal(exp_average_M, exp_average_S, N_genes)
+    genes = [f"Gene_{i}" for i in range(1, N_genes+1)]
+    
+    # 3. Specific recruitment (alpha_g)
+    alpha_cond1 = np.random.beta(beta_params_cond1[0], beta_params_cond1[1], N_genes)
+    alpha_cond2 = np.random.beta(beta_params_cond2[0], beta_params_cond2[1], N_genes)
+    
+    if spiked_indices:
+        alpha_cond2[spiked_indices] = np.clip(alpha_cond2[spiked_indices] * spike_multiplier, 0.0, 1.0)
+        
+    alphas = {conditions[0]: alpha_cond1, conditions[1]: alpha_cond2}
+    
+    # Calculate True F (Weighted average of alphas)
+    true_F_cond1 = np.sum(alpha_cond1 * exp_average_vals) / np.sum(exp_average_vals)
+    true_F_cond2 = np.sum(alpha_cond2 * exp_average_vals) / np.sum(exp_average_vals)
+    
+    # 4. Mass ratios to equalize sequencing depth
+    # Simulates library prep PCR amplification so PD and Total reach similar sequencing depths
+    mass_ratios = {
+        conditions[0]: 1.0 / true_F_cond1,
+        conditions[1]: 1.0 / true_F_cond2
+    }
+    
+    sigma_bio = np.sqrt(v_log)
+    counts_dict = {}
+    
+    for k, gene in enumerate(genes):
+        mu_gene = exp_average_vals[k]
+        gene_counts = [0] * len(samples)
+        
+        for cond in conditions:
+            alpha_g = alphas[cond][k]
+            depth_adjustment = mass_ratios[cond]
+            
+            for rep in range(1, n_replicates + 1):
+                # 5. Independent biological noise per gene, per replicate
+                delta = np.random.normal(0, sigma_bio)
+                
+                T_g_rep = mu_gene * np.exp(delta)
+                P_g_rep = alpha_g * T_g_rep
+                
+                idx_tot = samples.index(f"{cond}_Total_rep{rep}")
+                idx_pd = samples.index(f"{cond}_PD_rep{rep}")
+                
+                # 6. Apply technical scaling factors and depth adjustment
+                lambda_tot = T_g_rep * scaling_factors[idx_tot]
+                lambda_pd = P_g_rep * scaling_factors[idx_pd] * depth_adjustment
+                
+                gene_counts[idx_tot] = np.random.poisson(lambda_tot)
+                gene_counts[idx_pd] = np.random.poisson(lambda_pd)
+                
+        counts_dict[gene] = gene_counts
+        
+    counts_df = pd.DataFrame(counts_dict, index=samples).transpose()
+    
+    truth_dict = {
+        f'alpha_{conditions[0]}': alpha_cond1,
+        f'alpha_{conditions[1]}': alpha_cond2,
+        f'F_{conditions[0]}': true_F_cond1,
+        f'F_{conditions[1]}': true_F_cond2
+    }
+    
+    return counts_df, metadata_df, truth_dict

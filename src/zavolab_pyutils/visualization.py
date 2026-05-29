@@ -496,7 +496,10 @@ def plot_sanity_gene_expression_with_ci(
     condition_order=None,palette=None,
     CI_limit=0.95, adjust_multiple_comparisons=False,
     mean_dot_size:float=6.0,sample_dot_size:float=4.0,
-    one_subplot_width:float=2.8, subplot_height:float=5.2
+    one_subplot_width:float=2.8, subplot_height:float=5.2,
+    add_text_labels_for_samples:bool=False,
+    text_label_column_for_samples:str=None,
+    text_label_size_for_samples:int=8
 ):
     """
     Plots Sanity log2 normalized counts with Bayesian CI error bars.
@@ -524,6 +527,12 @@ def plot_sanity_gene_expression_with_ci(
         Width of a single subplot. Default is 2.8.
     subplot_height : float, optional
         Height of the subplot. Default is 5.2.
+    add_text_labels_for_samples : bool, optional
+        If True, adds text labels for each sample point in the plot. Default is False.
+    text_label_column_for_samples : str, optional
+        The column name in `metadata_df` to use for text labels when `add_text_labels_for_samples` is True. Default is None.
+    text_label_size_for_samples : int, optional
+        Font size for the sample text labels. Default is 8.
     """
     
     input_data_df = sample_norm_df.copy()
@@ -533,7 +542,14 @@ def plot_sanity_gene_expression_with_ci(
 
     melted = input_data_df.loc[common_genes].reset_index().rename(columns={'index': 'gene_name'})
     melted = pd.melt(melted, id_vars=['gene_name'], var_name=sample_col, value_name='log2_expr')
-    melted = pd.merge(metadata_df[[sample_col, cond_col]], melted, how='right', on=sample_col)
+    
+    # Select needed columns from metadata, ensuring the label column is fetched if requested
+    meta_cols = [sample_col, cond_col]
+    if add_text_labels_for_samples and (text_label_column_for_samples is not None):
+        if text_label_column_for_samples not in meta_cols:
+            meta_cols.append(text_label_column_for_samples)
+            
+    melted = pd.merge(metadata_df[meta_cols], melted, how='right', on=sample_col)
     
     if condition_order is None:
         order = sorted(melted[cond_col].unique())
@@ -579,6 +595,45 @@ def plot_sanity_gene_expression_with_ci(
             ax=ax, data=gene_data, x='log2_expr', y=cond_col, order=order, 
             color='grey', size=sample_dot_size, edgecolor='black', linewidth=1, alpha=0.5, zorder=1,
         )
+        
+        # ADDED SECTION: Add text labels conditionally, iterating through drawn data
+        if add_text_labels_for_samples and text_label_column_for_samples is not None:
+            texts = []
+            for index, row in gene_data.iterrows():
+                # Skip instances where mapping isn't possible (missing data)
+                if pd.isna(row['log2_expr']) or pd.isna(row[cond_col]):
+                    continue
+                    
+                try:
+                    # Y-coordinate relies on the condition's position in the ordered list
+                    y_coord = order.index(row[cond_col])
+                except ValueError:
+                    continue
+                    
+                label_text = row[text_label_column_for_samples]
+                if pd.isna(label_text):
+                    continue
+                    
+                texts.append(
+                    ax.annotate(
+                        xy=(row['log2_expr'], y_coord),
+                        text=str(label_text),
+                        size=text_label_size_for_samples,
+                        ha="left",
+                    )
+                )
+            if texts:
+                # Resolve overlapping elements cleanly leveraging adjustText library
+                adjust_text(
+                    texts, 
+                    arrowprops=dict(arrowstyle='-', color='black', lw=0.5), 
+                    ax=ax, 
+                    expand_text=(1.2, 1.2),    # Multiplier for the text bounding box to ensure padding
+                    expand_points=(1.2, 1.2),  # Multiplier for the point bounding box
+                    force_text=(0.5, 0.5),     # Repulsion force between overlapping texts (x, y)
+                    force_points=(0.5, 0.5),   # Repulsion force between text and data points (x, y)
+                    max_iterations=2000        # Allows the algorithm more attempts to find a clean layout
+                )
         
         ax.set(title=gene_name_to_plot, ylabel='', xlabel='$log_2~expr$')
         ax.tick_params(left=True, bottom=True)
@@ -958,3 +1013,192 @@ def plot_frac_sanity_recruitment_with_ci(
     fig.tight_layout()
     fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
     plt.close(fig)
+
+def plot_beta_goodness_of_fit(alpha_vals: np.ndarray, a: float, b: float, condition_name: str, savefig_path: str):
+    """
+    Generates an eCDF vs theoretical CDF plot and a Q-Q plot to validate the Beta distribution assumption[cite: 5].
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    
+    # Remove out-of-bounds values for clean plotting
+    clean_alpha = alpha_vals[(alpha_vals > 0) & (alpha_vals < 1)]
+    
+    # 1. ECDF vs CDF[cite: 5]
+    sorted_alpha = np.sort(clean_alpha)
+    ecdf = np.arange(1, len(sorted_alpha) + 1) / len(sorted_alpha)
+    theoretical_cdf = stats.beta.cdf(sorted_alpha, a, b)
+    
+    ax1.step(sorted_alpha, ecdf, label='Empirical CDF', color='black')
+    ax1.plot(sorted_alpha, theoretical_cdf, label=f'Theoretical Beta({a:.2f}, {b:.2f})', color='red', linestyle='--')
+    ax1.set_title(f'{condition_name}: eCDF vs Theoretical CDF')
+    ax1.set_xlabel('Recruitment Efficiency (alpha)')
+    ax1.set_ylabel('Cumulative Probability')
+    ax1.legend()
+    
+    # 2. Q-Q Plot[cite: 5]
+    theoretical_quantiles = stats.beta.ppf(ecdf, a, b)
+    ax2.scatter(theoretical_quantiles, sorted_alpha, s=5, color='black', alpha=0.5)
+    ax2.plot([0, 1], [0, 1], color='red', linestyle='--')
+    ax2.set_title(f'{condition_name}: Q-Q Plot')
+    ax2.set_xlabel('Theoretical Quantiles')
+    ax2.set_ylabel('Empirical Quantiles')
+    
+    plt.tight_layout()
+    plt.savefig(savefig_path, dpi=300)
+    plt.close()
+
+###
+# the following functions are for more generic plots, e.g. standard boxplots yet with significance annotations.
+###
+
+def get_pvalue_star(pval):
+    """Convert p-value to significance stars."""
+    if pval < 0.001:
+        return '***'
+    elif pval < 0.01:
+        return '**'
+    elif pval < 0.05:
+        return '*'
+    else:
+        return 'ns'
+
+def get_iqr(x):
+    """Calculate the Interquartile Range (IQR)."""
+    return x.quantile(0.75) - x.quantile(0.25)
+
+def horizontal_boxplot_with_stats(
+    data: pd.DataFrame,
+    savefig_path: str,
+    x: str,
+    y: str,
+    comparisons: list,
+    order: list = None,
+    palette: list = None,
+    x_label: str = None,
+    y_label: str = None,
+    title: str = None,
+    figsize: tuple = (3, 2),
+):
+    """
+    Creates a horizontal Seaborn boxplot and annotates it with statistical 
+    significance brackets (Mann-Whitney U test) to the right of the whiskers.
+    
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The input dataframe.
+    savefig_path : str or pathlib.Path
+        Full file path (including filename and extension) where the plot will be saved.
+    x : str
+        Column name for the numeric variable (x-axis).
+    y : str
+        Column name for the categorical variable (y-axis).
+    comparisons : list of tuples
+        List of pairs to compare, e.g., [('Cat1', 'Cat2')].
+    order : list, optional
+        Order to plot the categorical variables. Defaults to unique values.
+    palette : list/dict, optional
+        Colors to use for the categories.
+    x_label : str, optional
+        Label for the x-axis. Defaults to the `x` column name.
+    y_label : str, optional
+        Label for the y-axis. Defaults to the `y` column name.
+    title : str, optional
+        Title for the plot.
+    figsize : tuple, optional
+        Size of the figure. Defaults to (3, 2).
+    Returns:
+        fig, ax: The matplotlib figure and axis objects.
+    """
+    sns.set(font_scale=1)
+    sns.set_style("white")
+    
+    fig, ax = plt.subplots(1, 1, sharey=False, sharex=True, figsize=figsize)
+
+    if order is None:
+        order = list(data[y].unique())
+
+    ax = sns.boxplot(
+        data=data,
+        x=x,
+        y=y,
+        palette=palette,
+        order=order,
+        showfliers=False,
+        ax=ax
+    )
+
+    prev_point = 0
+    # Global IQR used for baseline bracket dimensioning
+    overall_iqr = get_iqr(data[x].dropna().astype(float))
+    h = 0.2 * overall_iqr
+
+    for cat1, cat2 in comparisons:
+        # Skip if categories are missing from the current order
+        if cat1 not in order or cat2 not in order:
+            continue
+            
+        pos1 = order.index(cat1)
+        pos2 = order.index(cat2)
+        
+        a = data.loc[data[y] == cat1, x].dropna().astype(float)
+        b = data.loc[data[y] == cat2, x].dropna().astype(float)
+        
+        # Perform Mann-Whitney U test
+        try:
+            stat, pval = stats.mannwhitneyu(a, b, alternative='two-sided')
+        except ValueError:
+            pval = 1.0  # Handle edge cases (e.g., all identical values or empty)
+            
+        star = get_pvalue_star(pval)
+        
+        # Calculate where the bracket should start (to the right of the highest whisker)
+        bp_top_a = a.quantile(0.75) + 1.6 * get_iqr(a) if len(a) > 0 else 0
+        bp_top_b = b.quantile(0.75) + 1.6 * get_iqr(b) if len(b) > 0 else 0
+        
+        # Shift bracket further to the right if there's already a bracket there
+        start_point = max(bp_top_a, bp_top_b, prev_point) + (h * 3.5 if prev_point > 0 else 0)
+        
+        cat_pos_1 = min(pos1, pos2)
+        cat_pos_2 = max(pos1, pos2)
+        
+        # Draw the bracket line
+        ax.plot(
+            [start_point, start_point + h, start_point + h, start_point],
+            [cat_pos_1, cat_pos_1, cat_pos_2, cat_pos_2], 
+            lw=0.75, 
+            color='black'
+        )
+        
+        # Add the significance text
+        ax.text(
+            start_point + 1.3 * h, 
+            0.5 * (cat_pos_1 + cat_pos_2), 
+            star, 
+            ha='left', 
+            va='center', 
+            color='black', 
+            size=7
+        )
+        
+        prev_point = start_point
+
+    # Formatting
+    ax.set_xlabel(x_label if x_label else x)
+    ax.set_ylabel(y_label if y_label else y)
+    ax.tick_params(left=True, bottom=True)
+    
+    if title:
+        ax.set_title(title)
+        
+    ax.tick_params(bottom=True)
+    sns.despine(ax=ax)
+
+    # Save outputs if requested
+    if savefig_path:
+        # Create parent directories if they do not exist
+        dir_path = Path(savefig_path).parent
+        dir_path.mkdir(parents=True, exist_ok=True)
+        fig.savefig(savefig_path, bbox_inches='tight', dpi=600)
+        
+    return fig, ax
