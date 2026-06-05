@@ -26,7 +26,6 @@ def check_bedtools_installed():
         )
 
 def parse_gtf_attributes_into_pd_dataframes(gtf_file,
-                                            input_skiprows=5,
                                             gene_type_field='gene_type',
                                             extract_exon_number=True,
                                             extract_gene_name_in_exons=True,
@@ -38,8 +37,6 @@ def parse_gtf_attributes_into_pd_dataframes(gtf_file,
     ----------
     gtf_file : str
         Path to input GTF file.
-    input_skiprows : int, optional
-        Number of header lines to skip in the GTF file. Default is 5 (compatible with GENCODE GTF files).
     gene_type_field : str, optional
         The field name for gene type in the GTF file. Default is 'gene_type'.
     extract_exon_number : bool, optional
@@ -57,50 +54,53 @@ def parse_gtf_attributes_into_pd_dataframes(gtf_file,
     Notes
     -----
     """ 
-    gtf_df = pd.read_csv(gtf_file, delimiter="\t", index_col=None, header=None, skiprows=input_skiprows)
+    # Use comment='#' to dynamically skip headers across different GTF versions
+    gtf_df = pd.read_csv(gtf_file, delimiter="\t", index_col=None, header=None, comment='#')
 
     # extract gene-level information
     genes = gtf_df.loc[gtf_df[2]=='gene'].reset_index(drop=True)
-    genes['gene_type'] = genes[8].str.split(gene_type_field+' "',expand=True)[1].str.split('"',expand=True)[0]
-    genes['gene_name'] = genes[8].str.split('gene_name "',expand=True)[1].str.split('"',expand=True)[0]
-    genes['gene_id'] = genes[8].str.split('gene_id "',expand=True)[1].str.split('"',expand=True)[0]
+    if not genes.empty:
+        # str.extract returns NaN if not found, preventing KeyErrors
+        genes['gene_type'] = genes[8].str.extract(f'{gene_type_field} "([^"]+)"', expand=False)
+        genes['gene_name'] = genes[8].str.extract(r'gene_name "([^"]+)"', expand=False)
+        genes['gene_id'] = genes[8].str.extract(r'gene_id "([^"]+)"', expand=False)
+    else:
+        genes['gene_type'] = pd.Series(dtype=str)
+        genes['gene_name'] = pd.Series(dtype=str)
+        genes['gene_id'] = pd.Series(dtype=str)
     print(f"Extracted gene-level information for {len(genes)} genes.")
 
     # extract exon-level information
     exons = gtf_df.loc[gtf_df[2]=='exon'].reset_index(drop=True)
     if verbose:
-        print(f"extracted {len(exons)} exon elements in the provided gtf_df dataframe. Will exctract gene_type\n")
-    exons['gene_type'] = exons[8].str.split(gene_type_field+' "',expand=True)[1].str.split('"',expand=True)[0]
-    if verbose:
-        print(f"extracted gene_type of exon elements in the provided gtf_df dataframe. Will exctract transcript_id\n")
-    exons['transcript_id'] = exons[8].str.split('transcript_id "',expand=True)[1].str.split('"',expand=True)[0]
-    if verbose:
-        print(f"extracted transcript_id of exon elements in the provided gtf_df dataframe. Will exctract gene_id\n")
-    exons['gene_id'] = exons[8].str.split('gene_id "',expand=True)[1].str.split('"',expand=True)[0]
-    if verbose:
-        print(f"extracted gene_id of exon elements in the provided gtf_df dataframe.\n")
+        print(f"extracted {len(exons)} exon elements in the provided gtf_df dataframe. Will extract attributes.\n")
+        
+    exons['gene_type'] = exons[8].str.extract(f'{gene_type_field} "([^"]+)"', expand=False)
+    exons['transcript_id'] = exons[8].str.extract(r'transcript_id "([^"]+)"', expand=False)
+    exons['gene_id'] = exons[8].str.extract(r'gene_id "([^"]+)"', expand=False)
+    
     if extract_gene_name_in_exons:
         if verbose:
             print(f"Will extract gene_name of exon elements in the provided gtf_df dataframe.\n")
-        exons['gene_name'] = exons[8].str.split('gene_name "',expand=True)[1].str.split('"',expand=True)[0]
-        if verbose:
-            print(f"extracted gene_name of exon elements in the provided gtf_df dataframe.\n")
+        exons['gene_name'] = exons[8].str.extract(r'gene_name "([^"]+)"', expand=False)
+        
     if extract_exon_number:
         if verbose:
             print(f"Will extract exon_number of exon elements in the provided gtf_df dataframe.\n")
-        exons['exon_number'] = exons[8].str.split('exon_number ',expand=True)[1].str.split(';',expand=True)[0].str.replace('"','').astype('int')
-        if verbose:
-            print(f"extracted exon_number of exon elements in the provided gtf_df dataframe.\n")
+        # Captures exon_number with OR without quotes (e.g. `exon_number "3"` or `exon_number 3`)
+        exons['exon_number'] = pd.to_numeric(
+            exons[8].str.extract(r'exon_number "?([^";\s]+)"?', expand=False), 
+            errors='coerce'
+        ).fillna(1).astype(int)
+
     if verbose:
         print(f"Will extract total number of exons in the transcripts (column 't') in the provided gtf_df dataframe.\n")
     exons['t']=1
     exons = pd.merge(exons.drop(['t'],axis=1),
-                     exons.groupby('transcript_id').agg({'t':sum}).reset_index(),how='inner',on='transcript_id')
+                     exons.groupby('transcript_id').agg({'t':'sum'}).reset_index(),how='inner',on='transcript_id')
     print(f"Extracted exon-level information for {len(exons)} exons.")
-    genes_df = genes
-    exons_df = exons
-
-    return gtf_df, genes_df, exons_df
+    
+    return gtf_df, genes, exons
 
 def get_terminal_exons(
     exons_df:pd.DataFrame,
