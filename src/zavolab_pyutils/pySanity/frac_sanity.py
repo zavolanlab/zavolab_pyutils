@@ -70,7 +70,8 @@ def fit_frac_sanity_map(ltq_total: np.ndarray, ltq_pd: np.ndarray, prior_alpha_F
         var_log2_F = np.nan
 
     # Calculate specific recruitments to test goodness-of-fit[cite: 5]
-    alpha_g = F_map * R_obs
+    # alpha_g is a physical probability and must stay within [0, 1] (see PDF Sec. 1 & 3.4)
+    alpha_g = np.clip(F_map * R_obs, 0.0, 1.0)
     ks_stat, ks_pval = kstest(alpha_g, 'beta', args=(a_map, b_map))
         
     return {
@@ -117,6 +118,9 @@ def calculate_differential_recruitment(
         'posterior_variance': posterior_variance,
         'z_score': z_scores,
         'p_value': p_values,
+        # Per-condition V_g = Var(LTQ_PD,g) + Var(LTQ_Total,g), used for single-condition CIs
+        'var_D_UT': var_pd_ut + var_total_ut,
+        'var_D_Stress': var_pd_stress + var_total_stress,
         # Credible intervals for natural sub-fractions[cite: 5]
         'alpha_UT': fit_ut['alpha_g'],
         'alpha_UT_CI_lower': 2.0**(log2_alpha_ut - 1.96 * np.sqrt(var_pd_ut + var_total_ut)),
@@ -129,6 +133,8 @@ def calculate_differential_recruitment(
     metadata = {
         'fit_UT': fit_ut, 
         'fit_Stress': fit_stress, 
+        'F_UT': fit_ut['F'],
+        'F_Stress': fit_stress['F'],
         'delta_log2_F': delta_log2_F,
         'var_delta_log2_F': var_delta_log2_F
     }

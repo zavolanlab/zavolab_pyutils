@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 # Import the existing robust parser from zavolab_pyutils
-from zavolab_pyutils.annotation import parse_gtf_attributes_into_pd_dataframes
+from zavolab_pyutils.general.annotation import parse_gtf_attributes_into_pd_dataframes
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -54,9 +54,25 @@ def map_regions_to_genomic(bed_df: pd.DataFrame, exons_sorted: pd.DataFrame) -> 
     if bed_cols < 3:
         raise ValueError("Input BED file must have at least 3 columns: transcript_id, start, end")
     
-    # Ensure the first three columns are named correctly, ignore extras
+    # Ensure the first three columns are named correctly; 4th column is optional element_name
     col_names = ['transcript_id', 'start_tr', 'end_tr']
-    bed_df.columns = col_names + [f"extra_{i}" for i in range(bed_cols - 3)]
+    if bed_cols >= 4:
+        col_names.append('element_name')
+    bed_df.columns = col_names + [f"extra_{i}" for i in range(bed_cols - len(col_names))]
+    
+    # Validate uniqueness of element_name if provided
+    if 'element_name' in bed_df.columns:
+        dup_mask = bed_df['element_name'].duplicated(keep=False)
+        n_non_unique_names = bed_df.loc[dup_mask, 'element_name'].nunique()
+        if n_non_unique_names > 0:
+            logging.error(
+                f"element_name column is not unique: {n_non_unique_names} name(s) appear more than once "
+                f"across {dup_mask.sum()} row(s)."
+            )
+            raise ValueError(
+                f"element_name values must be unique across all BED rows, "
+                f"but {n_non_unique_names} name(s) are duplicated."
+            )
     
     # Inner merge finds all exons belonging to the requested transcripts
     merged = pd.merge(bed_df, exons_sorted, on='transcript_id', how='inner')
@@ -64,6 +80,18 @@ def map_regions_to_genomic(bed_df: pd.DataFrame, exons_sorted: pd.DataFrame) -> 
     # Overlap condition: transcriptomic segment falls within the exon's bounds
     overlaps = merged[(merged['tr_end'] > merged['start_tr']) & (merged['tr_start'] < merged['end_tr'])].copy()
     
+    # Report BED rows that produced no output (absent from GTF or invalid strand/coordinates)
+    id_col = 'element_name' if 'element_name' in bed_df.columns else 'transcript_id'
+    bed_ids = set(bed_df[id_col])
+    overlapping_ids = set(overlaps[id_col]) if not overlaps.empty else set()
+    missing_ids = bed_ids - overlapping_ids
+    if missing_ids:
+        logging.warning(
+            f"{len(missing_ids)} element(s) from the input BED produced no genomic coordinates in the output GTF "
+            f"(possible causes: transcript ID absent from GTF, unsupported strand value, or coordinates out of transcript bounds). "
+            f"Affected element(s): {', '.join(sorted(missing_ids))}"
+        )
+
     if overlaps.empty:
         logging.warning("No overlapping regions found! Please ensure transcript IDs match between BED and GTF.")
         return overlaps
@@ -95,8 +123,11 @@ def create_output_gtf(overlaps: pd.DataFrame, output_file: str, temp_dir: str):
     logging.info("Generating output GTF features...")
     Path(temp_dir).mkdir(parents=True, exist_ok=True)
     
-    # Construct a unique ID for the region mappings
-    overlaps['new_id'] = overlaps['transcript_id'] + "_" + overlaps['start_tr'].astype(str) + "_" + overlaps['end_tr'].astype(str)
+    # Use element_name from BED col 4 if provided, otherwise construct a unique ID
+    if 'element_name' in overlaps.columns:
+        overlaps['new_id'] = overlaps['element_name'].astype(str)
+    else:
+        overlaps['new_id'] = overlaps['transcript_id'] + "_" + overlaps['start_tr'].astype(str) + "_" + overlaps['end_tr'].astype(str)
     
     overlaps['source_out'] = 'CUSTOM'
     overlaps['score_out'] = '.'

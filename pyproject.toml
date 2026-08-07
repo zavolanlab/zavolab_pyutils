@@ -53,10 +53,11 @@ dev = [
 ]
 
 [project.scripts]
-redefine_qual_and_NHtag = "zavolab_pyutils.redefine_qual_and_NHtag:main"
-normalize_umi_lengths = "zavolab_pyutils.normalize_umi_lengths:main"
-plot_cs_motifs = "zavolab_pyutils.motif_metaplot:plot_cs_motifs"
-transcript_to_genomic = "zavolab_pyutils.transcript_to_genomic:main"
+redefine_qual_and_NHtag = "zavolab_pyutils.CLI.redefine_qual_and_NHtag:main"
+normalize_umi_lengths = "zavolab_pyutils.CLI.normalize_umi_lengths:main"
+plot_cs_motifs = "zavolab_pyutils.CLI.motif_metaplot:plot_cs_motifs"
+transcript_to_genomic = "zavolab_pyutils.CLI.transcript_to_genomic:main"
+cds_to_transcriptomic = "zavolab_pyutils.CLI.cds_to_transcriptomic:main"
 
 [project.urls]
 Homepage = "https://github.com/zavolanlab/zavolab_pyutils"
