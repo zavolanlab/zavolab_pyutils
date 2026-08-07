@@ -9,7 +9,7 @@ For now, please refer to:
 - Function docstrings in the source code
 - [Main README](../README.md) - Quick start guide
 
-Alternatively, and powerfully, use AI:
+Alternatively, and powerfully, use AI. Here is the example of prompts for an old version of zavolab_pyutils:
 
 ![Gemini example, screenshot 1](./images/Gemini_documentation_1.png)
 ![Gemini example, screenshot 2](./images/Gemini_documentation_2.png)

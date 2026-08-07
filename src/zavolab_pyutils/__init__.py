@@ -6,28 +6,53 @@ library size normalization, advanced Bayesian inference (Sanity), relative isofo
 usage testing, visualization, and read count simulations.
 """
 
-from .read_count_data_analysis import (
+from .general.read_count_data_analysis import (
     apply_deseq2_normalization,
-    apply_sanity_normalization_full_bayesian,
-    prepare_isoform_sanity_matrix,
-    test_differential_relative_usage,
-    test_differential_expression
+    get_MultiDimR2,
+    model_mean_variance,
+    get_deseq2_means_and_errors,
+    test_differential_expression,
 )
 
-from .annotation import (
-    parse_gtf_attributes_into_pd_dataframes, 
-    genbank_to_fasta_and_gtf, 
+from .general.annotation import (
+    parse_gtf_attributes_into_pd_dataframes,
+    genbank_to_fasta_and_gtf,
 )
 
-from .visualization import (
+from .general.visualization import (
     plot_size_factors,
-    plot_sanity_gene_expression_with_ci,
-    plot_sanity_relative_usage_with_ci
+    pca_plot,
+    plot_gene_expression_with_ci,
+    plot_mean_variance_diagnostics,
+    plot_mean_vs_cv,
+    plot_expr_vs_libsize_correlation,
+    horizontal_boxplot_with_stats,
 )
 
-from .read_count_simulation import (
+from .general.read_count_simulation import (
     simulate_isoform_poisson_lognormal_counts,
-    simulate_isoform_negative_binomial_counts
+    simulate_isoform_negative_binomial_counts,
+)
+
+from .pySanity.sanity import (
+    apply_sanity_normalization,
+    apply_sanity_normalization_full_bayesian,
+    test_differential_relative_usage,
+    prepare_isoform_sanity_matrix,
+    test_differential_expression as sanity_test_differential_expression,
+)
+
+from .pySanity.frac_sanity import (
+    fit_frac_sanity_map,
+    calculate_differential_recruitment,
+)
+
+from .pySanity.visualization import (
+    plot_sanity_gene_expression_with_ci,
+    plot_sanity_relative_usage_with_ci,
+    plot_variance_vs_expression,
+    plot_frac_sanity_recruitment_with_ci,
+    plot_beta_goodness_of_fit,
 )
 
 try:
@@ -40,17 +65,33 @@ __author__ = "Zavolan Lab"
 __license__ = "MIT"
 
 __all__ = [
+    # general
     "apply_deseq2_normalization",
-    "apply_sanity_normalization_full_bayesian",
-    "prepare_isoform_sanity_matrix",
-    "test_differential_relative_usage",
+    "get_MultiDimR2",
+    "model_mean_variance",
+    "get_deseq2_means_and_errors",
     "test_differential_expression",
-    "convert_gff_to_gtf",
-    "convert_gtf_to_gff",
-    "parse_gtf_attributes",
+    "parse_gtf_attributes_into_pd_dataframes",
+    "genbank_to_fasta_and_gtf",
     "plot_size_factors",
+    "pca_plot",
+    "plot_gene_expression_with_ci",
+    "plot_mean_variance_diagnostics",
+    "plot_mean_vs_cv",
+    "plot_expr_vs_libsize_correlation",
+    "horizontal_boxplot_with_stats",
+    "simulate_isoform_poisson_lognormal_counts",
+    "simulate_isoform_negative_binomial_counts",
+    # pySanity
+    "apply_sanity_normalization",
+    "apply_sanity_normalization_full_bayesian",
+    "test_differential_relative_usage",
+    "prepare_isoform_sanity_matrix",
+    "fit_frac_sanity_map",
+    "calculate_differential_recruitment",
     "plot_sanity_gene_expression_with_ci",
     "plot_sanity_relative_usage_with_ci",
-    "simulate_isoform_poisson_lognormal_counts",
-    "simulate_isoform_negative_binomial_counts"
+    "plot_variance_vs_expression",
+    "plot_frac_sanity_recruitment_with_ci",
+    "plot_beta_goodness_of_fit",
 ]

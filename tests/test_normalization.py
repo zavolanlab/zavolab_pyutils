@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
-from zavolab_pyutils.read_count_data_analysis import apply_deseq2_normalization
+from zavolab_pyutils.general.read_count_data_analysis import apply_deseq2_normalization
 
 class TestNormalization:
     @pytest.fixture

@@ -37,6 +37,41 @@ pip install zavolab_pyutils
 conda install -c bioconda zavolab_pyutils
 ```
 
+## Package Structure
+
+The source code is organized into three subpackages under `src/zavolab_pyutils/`:
+
+```
+zavolab_pyutils/
+├── pySanity/          # Bayesian Sanity normalization (Breda et al. 2021) and fracSanity
+│   ├── sanity.py      # apply_sanity_normalization, apply_sanity_normalization_full_bayesian,
+│   │                  # test_differential_expression, test_differential_relative_usage,
+│   │                  # prepare_isoform_sanity_matrix
+│   ├── frac_sanity.py # fit_frac_sanity_map, calculate_differential_recruitment
+│   └── visualization.py  # Sanity-specific plots (CI expression, relative usage, v_g, fracSanity)
+├── CLI/               # Command-line tools used in Snakemake/Nextflow pipelines
+│   ├── motif_metaplot.py          # plot_cs_motifs
+│   ├── normalize_umi_lengths.py   # normalize_umi_lengths
+│   ├── redefine_qual_and_NHtag.py # redefine_qual_and_NHtag
+│   └── transcript_to_genomic.py   # transcript_to_genomic
+└── general/           # General-purpose genomic data analysis utilities
+    ├── read_count_data_analysis.py  # apply_deseq2_normalization, model_mean_variance, ...
+    ├── annotation.py                # parse_gtf_attributes_into_pd_dataframes, ...
+    ├── visualization.py             # pca_plot, plot_size_factors, plot_mean_vs_cv, ...
+    ├── read_count_simulation.py     # simulate_isoform_poisson_lognormal_counts, ...
+    └── parsing_workflow_outputs.py  # parse_mapping_stats, ...
+```
+
+All public symbols are also accessible directly from the top-level package:
+```python
+# via subpackage (explicit)
+from zavolab_pyutils.pySanity.sanity import apply_sanity_normalization_full_bayesian
+from zavolab_pyutils.general.read_count_data_analysis import apply_deseq2_normalization
+
+# or from the top-level (convenient)
+from zavolab_pyutils import apply_sanity_normalization_full_bayesian, apply_deseq2_normalization
+```
+
 ## Documentation and examples of usage
 
 For various examples of usage and testing, use [test_module.ipynb](test_module.ipynb).
