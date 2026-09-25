@@ -157,7 +157,7 @@ def plot_sanity_gene_expression_with_ci(
                     max_iterations=2000        # Allows the algorithm more attempts to find a clean layout
                 )
         
-        ax.set(title=gene_name_to_plot, ylabel='', xlabel='$log_2~expr$')
+        ax.set(title=gene_name_to_plot, ylabel='', xlabel='$log_2$(CPM)')
         ax.tick_params(left=True, bottom=True)
         if k > 0: ax.tick_params(left=False)
         
