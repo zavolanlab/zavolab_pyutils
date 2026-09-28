@@ -79,7 +79,11 @@ For various examples of usage and testing, use [test_module.ipynb](test_module.i
 Use AI to ask about the functionality. See the example with Gemini in [docs](docs/).
 
 For further practical examples, please look into other projects where the functions from the package have been used:
-[APA localization](https://github.com/zavolanlab/APA_localization/tree/nfya)
+
+[NFYA CPA isoforms](https://github.com/zavolanlab/APA_localization/tree/nfya)
+
+[CD47 CPA isoforms](https://github.com/zavolanlab/APA_localization/tree/cd47)
+
 this list will be continuosly updated...
 
 ## Testing
