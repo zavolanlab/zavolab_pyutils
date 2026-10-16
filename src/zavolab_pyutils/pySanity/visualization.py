@@ -2,6 +2,7 @@
 Visualization functions specific to pySanity outputs.
 """
 
+import warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -57,7 +58,16 @@ def plot_sanity_gene_expression_with_ci(
         Font size for the sample text labels. Default is 8.
     """
     
-    input_data_df = sample_norm_df.copy()
+    # keep only sample columns: annotation columns (e.g. gene_id) would otherwise be melted into
+    # the expression values and turn the x-axis categorical
+    metadata_samples = set(metadata_df[sample_col])
+    sample_columns = [col for col in sample_norm_df.columns if col in metadata_samples]
+    if len(sample_columns) == 0:
+        raise ValueError(
+            f"None of the columns of sample_norm_df are in metadata_df['{sample_col}']. "
+            f"Examples: columns {list(sample_norm_df.columns[:3])}, metadata {list(metadata_df[sample_col][:3])}."
+        )
+    input_data_df = sample_norm_df[sample_columns].astype(float)
     input_data_df.index.name = 'index'
     
     common_genes = [g for g in selected_genes if g in input_data_df.index]
@@ -72,7 +82,14 @@ def plot_sanity_gene_expression_with_ci(
             meta_cols.append(text_label_column_for_samples)
             
     melted = pd.merge(metadata_df[meta_cols], melted, how='right', on=sample_col)
-    
+
+    # samples without a condition cannot be placed on the plot
+    unmatched = melted.loc[melted[cond_col].isna(), sample_col].unique()
+    if len(unmatched) > 0:
+        warnings.warn(f"{len(unmatched)} samples have no '{cond_col}' in metadata_df "
+                      f"and are not plotted, e.g. {list(unmatched[:3])}.")
+        melted = melted.loc[melted[cond_col].notna()]
+
     if condition_order is None:
         order = sorted(melted[cond_col].unique())
     else:
@@ -107,14 +124,16 @@ def plot_sanity_gene_expression_with_ci(
         mean_data_df = pd.DataFrame([log2_means,order]).transpose()
         mean_data_df.columns = ['log2_expr',cond_col]
 
-        ax = sns.pointplot(ax=ax, data=mean_data_df, x='log2_expr', y=cond_col, 
+        # orient is set explicitly: with all-missing values seaborn may otherwise infer a
+        # vertical plot and turn the x-axis into a categorical axis of conditions
+        ax = sns.pointplot(ax=ax, data=mean_data_df, x='log2_expr', y=cond_col, orient='h',
                              markersize=mean_dot_size,palette=palette, order=order,
                              color=('black' if palette is None else None), zorder=3, alpha=0.7,
                                 errorbar=None,
                              )
         ax.errorbar(log2_means, y_pos, xerr=err_margins, fmt='o', color='black', capsize=4, zorder=2, markersize=0)
         ax = sns.swarmplot(
-            ax=ax, data=gene_data, x='log2_expr', y=cond_col, order=order, 
+            ax=ax, data=gene_data, x='log2_expr', y=cond_col, order=order, orient='h',
             color='grey', size=sample_dot_size, edgecolor='black', linewidth=1, alpha=0.5, zorder=1,
         )
         

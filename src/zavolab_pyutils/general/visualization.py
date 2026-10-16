@@ -102,6 +102,7 @@ def pca_plot(
     highlight_samples_list=None,
     calculate_permanova_R2=False,
     permanova_R2_ajusted = True,
+    permanova_feature=None,
     add_2D_KDE_countours=False,
     add_text_labels_for_samples=False,
     text_label_column_for_samples=None,
@@ -157,6 +158,10 @@ def pca_plot(
         (both for the full scaled dataset and the 2D PCA projection). Default is False.
     permanova_R2_ajusted : bool, optional
         If true, calculated R2adj,otherwise standard R2. Default is True.
+    permanova_feature : str or list of str, optional
+        Column name(s) in `metadata_df` defining the groups for the PERMANOVA R2. When a
+        list is given (e.g. [hue_feature, style_feature]), groups are the combinations of
+        the listed columns. Default is None (use `hue_feature`).
     add_2D_KDE_countours : bool, optional
         If True, adds 2D KDE contours for each category in the hue feature. Default is False.
     add_text_labels_for_samples : bool, optional
@@ -242,9 +247,34 @@ def pca_plot(
         style_order = None
         markers_arg = True
 
-    if calculate_permanova_R2 and len(hue_order) > 1:
-        R2_AllGenes = np.round(get_MultiDimR2(x,list(principalDf[hue]),permanova_R2_ajusted),2)
-        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,list(principalDf[hue]),permanova_R2_ajusted),2)
+    # groups for PERMANOVA: hue_feature by default, or the combination of the given column(s)
+    if permanova_feature is None:
+        permanova_columns = [hue_feature]
+    elif isinstance(permanova_feature, str):
+        permanova_columns = [permanova_feature]
+    else:
+        permanova_columns = list(permanova_feature)
+    run_permanova = False
+    if calculate_permanova_R2:
+        missing = [col for col in permanova_columns if col not in principalDf.columns]
+        if missing:
+            raise ValueError(
+                f"permanova_feature column(s) {missing} not found in the metadata columns."
+            )
+        if principalDf[permanova_columns].isna().any().any():
+            raise ValueError(
+                """NA values found in permanova_feature column(s).
+            Please fill NA values with a string (e.g. 'NA') before plotting."""
+            )
+        permanova_groups = list(
+            principalDf[permanova_columns].astype(str).agg(" x ".join, axis=1)
+        )
+        permanova_label = " x ".join(permanova_columns)
+        run_permanova = len(set(permanova_groups)) > 1
+
+    if run_permanova:
+        R2_AllGenes = np.round(get_MultiDimR2(x,permanova_groups,permanova_R2_ajusted),2)
+        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,permanova_groups,permanova_R2_ajusted),2)
 
     ###
     # PCA-only
@@ -324,10 +354,12 @@ def pca_plot(
         + str(int(np.round(pca.explained_variance_ratio_[1] * 100, 0)))
         + "% variance"
     )
-    if calculate_permanova_R2 and len(hue_order) > 1:
+    if run_permanova:
+        # name the grouping in the title only when it differs from the default (hue_feature)
+        permanova_by = "" if permanova_feature is None else " by " + permanova_label
         ax.set(title=str(len(data_df)) + " top expressed genes"+\
-               "\nPERMANOVA R2 (all genes) = "+str(R2_AllGenes)+\
-                "\nPERMANOVA R2 (PC1&PC2) = "+str(R2_PC1andPC2))
+               "\nPERMANOVA R2"+permanova_by+" (all genes) = "+str(R2_AllGenes)+\
+                "\nPERMANOVA R2"+permanova_by+" (PC1&PC2) = "+str(R2_PC1andPC2))
     else:
         ax.set(title=str(len(data_df)) + " top expressed genes")
     
