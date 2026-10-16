@@ -32,6 +32,12 @@ jobs:
         # Install package AND pytest and other stuff for running the tests
         pip install -e ".[dev]"
 
+    - name: Build Sanity (C++) from GitHub
+      run: |
+        sudo apt-get update && sudo apt-get install -y zlib1g-dev
+        SANITY_PREFIX=$HOME/.local SANITY_ARCH_FLAG=-march=x86-64-v2 make install-sanity
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
     - name: Run all tests with pytest
       run: |
         # This automatically finds TestNormalization in tests/test_normalization.py

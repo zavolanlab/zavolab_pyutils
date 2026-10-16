@@ -2,22 +2,20 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import betaln, roots_hermite
-from scipy.stats import norm, kstest
+from scipy.stats import norm,beta, kstest
 
 def fit_frac_sanity_map(ltq_total: np.ndarray, var_total: np.ndarray, ltq_pd: np.ndarray, var_pd: np.ndarray, prior_alpha_F: float = 1.0, prior_beta_F: float = 1.0):
     """
-    MAP Estimation of Log-Beta parameters (a, b) with F analytically constrained.
-    Implements the exact likelihood formula convolved with Gaussian measurement error,
-    stabilized via the Log-Sum-Exp trick for accurate Hessian approximation.
+    MAP Estimation of Log-Beta parameters (a, b) with F analytically constrained via the Median.
+    Implements a Gaussian-convolved Beta-Uniform Mixture Model to absorb true differential outliers.
     """
     ln2 = np.log(2)
     D_obs = ltq_pd - ltq_total
     V_obs = np.clip(var_pd + var_total, 1e-12, None)
     
-    # 1. EXACT PDF FORMULATION: Arithmetic mean of the observed 2^D_g ratios
-    R_obs = 2.0 ** D_obs
-    mean_ratio = np.mean(R_obs)
-    
+    # 1. ROBUST MEDIAN ANCHOR
+    # Calculated on the full dataset to maintain the true center
+    median_ratio = np.median(2.0 ** D_obs)
     is_uniform_prior = (prior_alpha_F == 1.0 and prior_beta_F == 1.0)
     
     # 2. Setup Gauss-Hermite Quadrature
@@ -25,77 +23,82 @@ def fit_frac_sanity_map(ltq_total: np.ndarray, var_total: np.ndarray, ltq_pd: np
     z_k, w_k = roots_hermite(n_quad)
     log_w_k = np.log(w_k)
     
+    # Evaluate across all genes
     D_true_grid = D_obs[:, np.newaxis] + np.sqrt(2.0 * V_obs)[:, np.newaxis] * z_k[np.newaxis, :]
     
+    # Mixture parameter: Assume up to 10% of data are true outliers (spiked genes)
+    pi_outlier = 0.10
+    
     def negative_log_posterior(params):
-        a, b = params
+        a, b_param = params
         
-        # Analytic calculation of F[cite: 7]
-        F = a / ((a + b) * mean_ratio)
+        # Analytic calculation of F
+        median_beta = beta.ppf(0.5, a, b_param)
+        F = median_beta / median_ratio
         
-        if F <= 1e-7 or F >= 1.0 - 1e-7:
-            return 1e9 + 1e5 * (F - 0.5)**2
+        penalty = 0.0
+        if F >= 1.0 - 1e-5:
+            penalty += 1e8 * (F - (1.0 - 1e-5))**2
+            F = 1.0 - 1e-5
+        elif F <= 1e-5:
+            penalty += 1e8 * (1e-5 - F)**2
+            F = 1e-5
             
         alpha_grid = F * (2.0 ** D_true_grid)
         
-        # Mask valid physical probabilities
-        valid_mask = (alpha_grid > 1e-10) & (alpha_grid < 1.0 - 1e-10)
+        # Initialize probabilities in LINEAR space for the mixture addition
+        pdf_grid = np.zeros_like(alpha_grid)
         
-        # Initialize log-likelihood array for Log-Sum-Exp
-        L = np.full_like(alpha_grid, -np.inf)
+        # 3. BETA DISTRIBUTION COMPONENT
+        valid_mask = (alpha_grid > 1e-10) & (alpha_grid < 1.0 - 1e-10)
         
         if np.any(valid_mask):
             alpha_safe = alpha_grid[valid_mask]
-            # P(D_g | a, b) evaluated purely in log-space[cite: 7]
-            L[valid_mask] = (
+            
+            # Log-Beta PDF
+            log_pdf_beta = (
                 a * np.log(alpha_safe) + 
-                (b - 1.0) * np.log(1.0 - alpha_safe) - 
-                betaln(a, b) + 
+                (b_param - 1.0) * np.log(1.0 - alpha_safe) - 
+                betaln(a, b_param) + 
                 np.log(ln2)
-            ) + log_w_k[np.newaxis, :].repeat(D_obs.shape[0], axis=0)[valid_mask]
+            )
+            pdf_grid[valid_mask] = np.exp(log_pdf_beta)
+            
+        # 4. MIXTURE CONVOLUTION
+        # P(D_true) = (1 - pi) * P_beta(D_true) + pi * P_uniform(D_true)
+        # The uniform distribution across log2 space acts as a constant noise floor
+        noise_floor = 1e-4
+        mixture_pdf = (1.0 - pi_outlier) * pdf_grid + (pi_outlier * noise_floor)
         
-        # 3. LOG-SUM-EXP TRICK: log(sum(exp(L))) = L_max + log(sum(exp(L - L_max)))
-        L_max = np.max(L, axis=1, keepdims=True)
-        L_max_finite = np.where(np.isinf(L_max), 0, L_max) 
+        # Integrate over Gaussian Quadrature weights
+        marginal_lik = (1.0 / np.sqrt(np.pi)) * np.sum(mixture_pdf * w_k[np.newaxis, :], axis=1)
         
-        sum_exp = np.sum(np.exp(L - L_max_finite), axis=1)
+        # Prevent log(0)
+        marginal_lik = np.clip(marginal_lik, 1e-300, None)
         
-        invalid_genes = np.isinf(L_max).flatten() | (sum_exp <= 0)
-        
-        log_marginal = np.zeros(D_obs.shape[0])
-        log_marginal[~invalid_genes] = -0.5 * np.log(np.pi) + L_max_finite[~invalid_genes].flatten() + np.log(sum_exp[~invalid_genes])
-        log_marginal[invalid_genes] = -1e5  # Steep penalty for physically impossible regions
-        
-        NLL = -np.sum(log_marginal)
+        NLL = -np.sum(np.log(marginal_lik))
         
         if is_uniform_prior:
-            NLP = NLL
+            NLP = NLL + penalty
         else:
             log_prior_F = (prior_alpha_F - 1) * np.log(F) + (prior_beta_F - 1) * np.log(1 - F) - betaln(prior_alpha_F, prior_beta_F)
-            NLP = NLL - log_prior_F
+            NLP = NLL - log_prior_F + penalty
             
         return NLP
 
-    # 4. Multi-start initialization to prevent local-minima trapping
     best_nlp = np.inf
     best_res = None
-    bounds = [(0.01, 1000.0), (1.001, 1000.0)]
-    
-    initializations = [(1.0, 19.0), (2.0, 8.0), (5.0, 5.0), (0.5, 50.0)]
+    bounds = [(0.1, 1000.0), (1.001, 10000.0)]
+    initializations = [(1.0, 19.0), (2.0, 8.0), (5.0, 5.0), (8.0, 2.0)]
     
     for init_a, init_b in initializations:
         try:
-            # Skip initializations that violate the analytical F boundary
-            test_F = init_a / ((init_a + init_b) * mean_ratio)
-            if test_F >= 1.0: 
-                continue
-                
             res = minimize(negative_log_posterior, [init_a, init_b], method='L-BFGS-B', bounds=bounds)
             if res.fun < best_nlp:
                 best_nlp = res.fun
                 best_res = res
         except Exception:
-            pass
+            continue
             
     if best_res is None:
         a_map, b_map = 1.0, 19.0
@@ -104,19 +107,16 @@ def fit_frac_sanity_map(ltq_total: np.ndarray, var_total: np.ndarray, ltq_pd: np
         a_map, b_map = best_res.x
         opt_success = best_res.success
         
-    F_map = a_map / ((a_map + b_map) * mean_ratio)
+    F_map = beta.ppf(0.5, a_map, b_map) / median_ratio
     
-    # 5. Laplace Approximation for Credible Intervals via Inverse Hessian[cite: 7]
+    # 5. Laplace Approximation via Numerical Delta Method
     try:
         cov_ab = best_res.hess_inv.todense()
-        var_a = cov_ab[0, 0]
-        var_b = cov_ab[1, 1]
+        eps = 1e-5
+        df_da = (beta.ppf(0.5, a_map + eps, b_map) - beta.ppf(0.5, a_map - eps, b_map)) / (2 * eps * median_ratio)
+        df_db = (beta.ppf(0.5, a_map, b_map + eps) - beta.ppf(0.5, a_map, b_map - eps)) / (2 * eps * median_ratio)
         
-        # Delta method for Var(F)[cite: 7]
-        df_da = b_map / (((a_map + b_map)**2) * mean_ratio)
-        df_db = -a_map / (((a_map + b_map)**2) * mean_ratio)
         grad_F = np.array([df_da, df_db])
-        
         var_F = grad_F.T @ cov_ab @ grad_F
         var_log2_F = var_F / ((F_map * ln2)**2) 
     except Exception:
@@ -127,7 +127,7 @@ def fit_frac_sanity_map(ltq_total: np.ndarray, var_total: np.ndarray, ltq_pd: np
     ks_stat, ks_pval = kstest(alpha_g, 'beta', args=(a_map, b_map))
         
     return {
-        'F': F_map, 'var_F': var_F, 'var_log2_F': var_log2_F,
+        'F': F_map, 'var_F': float(var_F), 'var_log2_F': float(var_log2_F),
         'a': a_map, 'b': b_map,
         'ks_stat': ks_stat, 'ks_pval': ks_pval,
         'alpha_g': alpha_g,
