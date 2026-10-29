@@ -11,6 +11,12 @@ dependencies:
   - bioconda::bedtools
   # auxiliary tools for documentation
   - conda-forge::pandoc
+  # build tools for the C++ Sanity binary used by zavolab_pyutils.Sanity_tools;
+  # after creating the env, build and install it with `make install-sanity`
+  - conda-forge::cxx-compiler
+  - conda-forge::make
+  - conda-forge::zlib
+  - conda-forge::git
   # pip packages - with editable install of this package
   - pip
   - pip:

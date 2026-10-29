@@ -94,11 +94,15 @@ def pca_plot(
     savefig_path,
     sns_color_palette="hls",
     hue_order = None,
+    style_feature=None,
+    markers=None,
+    style_order=None,
     plot_lims=None,
     legend_title="",
     highlight_samples_list=None,
     calculate_permanova_R2=False,
     permanova_R2_ajusted = True,
+    permanova_feature=None,
     add_2D_KDE_countours=False,
     add_text_labels_for_samples=False,
     text_label_column_for_samples=None,
@@ -125,8 +129,24 @@ def pca_plot(
         The column name in `metadata_df` used to group and color the samples.
     savefig_path : str or pathlib.Path
         Full file path (including filename and extension) where the plot will be saved.
-    sns_color_palette : str, optional
-        Seaborn color palette name to use for the categorical groups. Default is "hls".
+    sns_color_palette : str, list or dict, optional
+        Colors for the categorical groups. Either a seaborn color palette name, a list of
+        colors (ordered as `hue_order`), or a dict mapping each category of `hue_feature`
+        to a color (e.g. {"UT": "grey", "DMSO": "skyblue"}). When a dict is given and
+        `hue_order` is None, the dict key order defines the legend order. Default is "hls".
+    hue_order : list, optional
+        Order of the `hue_feature` categories in the legend. Default is None (sorted order,
+        or the key order of `sns_color_palette` when it is a dict).
+    style_feature : str, optional
+        Column name in `metadata_df` used to vary the marker shape of the samples.
+        Default is None (a single marker shape for all samples).
+    markers : dict, list or bool, optional
+        Marker shapes for `style_feature`. Either a dict mapping each category to a
+        matplotlib marker (e.g. {"10min": "o", "60min": "s"}), a list of markers ordered as
+        `style_order`, or True to let seaborn pick them. Default is None.
+    style_order : list, optional
+        Order of the `style_feature` categories in the legend. Default is None (sorted order,
+        or the key order of `markers` when it is a dict).
     plot_lims : tuple of tuple, optional
         Axis limits formatted as ((xmin, xmax), (ymin, ymax)). Default is None (auto-scale).
     legend_title : str, optional
@@ -138,6 +158,10 @@ def pca_plot(
         (both for the full scaled dataset and the 2D PCA projection). Default is False.
     permanova_R2_ajusted : bool, optional
         If true, calculated R2adj,otherwise standard R2. Default is True.
+    permanova_feature : str or list of str, optional
+        Column name(s) in `metadata_df` defining the groups for the PERMANOVA R2. When a
+        list is given (e.g. [hue_feature, style_feature]), groups are the combinations of
+        the listed columns. Default is None (use `hue_feature`).
     add_2D_KDE_countours : bool, optional
         If True, adds 2D KDE contours for each category in the hue feature. Default is False.
     add_text_labels_for_samples : bool, optional
@@ -174,13 +198,83 @@ def pca_plot(
 
     x_feature, y_feature = "PC1", "PC2"
     hue = hue_feature
-    if hue_order is None:
-        hue_order = list(np.sort(principalDf[hue].dropna().unique()))
-    palette = list(sns.color_palette(sns_color_palette, len(hue_order)))
 
-    if calculate_permanova_R2 and len(hue_order) > 1:
-        R2_AllGenes = np.round(get_MultiDimR2(x,list(principalDf[hue]),permanova_R2_ajusted),2)
-        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,list(principalDf[hue]),permanova_R2_ajusted),2)
+    # colors: either a seaborn palette name / list of colors, or a {category: color} dict
+    if isinstance(sns_color_palette, dict):
+        if hue_order is None:
+            observed = set(principalDf[hue])
+            hue_order = [cat for cat in sns_color_palette if cat in observed]
+        missing = [cat for cat in hue_order if cat not in sns_color_palette]
+        if missing:
+            raise ValueError(
+                f"No color provided in sns_color_palette for {hue_feature} categories: {missing}"
+            )
+        palette = {cat: sns_color_palette[cat] for cat in hue_order}
+    else:
+        if hue_order is None:
+            hue_order = list(np.sort(principalDf[hue].dropna().unique()))
+        palette = dict(
+            zip(hue_order, list(sns.color_palette(sns_color_palette, len(hue_order))))
+        )
+
+    # marker shapes: either a {category: marker} dict, a list of markers, or True/None
+    style = style_feature
+    if style is not None:
+        if style not in principalDf.columns:
+            raise ValueError(
+                f"style_feature '{style}' not found in the metadata columns."
+            )
+        if principalDf[style].isna().any():
+            raise ValueError(
+                """NA values found in style_feature column.
+            Please fill NA values with a string (e.g. 'NA') before plotting."""
+            )
+        if isinstance(markers, dict):
+            if style_order is None:
+                observed = set(principalDf[style])
+                style_order = [cat for cat in markers if cat in observed]
+            missing = [cat for cat in style_order if cat not in markers]
+            if missing:
+                raise ValueError(
+                    f"No marker provided in markers for {style} categories: {missing}"
+                )
+            markers_arg = {cat: markers[cat] for cat in style_order}
+        else:
+            if style_order is None:
+                style_order = list(np.sort(principalDf[style].dropna().unique()))
+            markers_arg = markers if markers is not None else True
+    else:
+        style_order = None
+        markers_arg = True
+
+    # groups for PERMANOVA: hue_feature by default, or the combination of the given column(s)
+    if permanova_feature is None:
+        permanova_columns = [hue_feature]
+    elif isinstance(permanova_feature, str):
+        permanova_columns = [permanova_feature]
+    else:
+        permanova_columns = list(permanova_feature)
+    run_permanova = False
+    if calculate_permanova_R2:
+        missing = [col for col in permanova_columns if col not in principalDf.columns]
+        if missing:
+            raise ValueError(
+                f"permanova_feature column(s) {missing} not found in the metadata columns."
+            )
+        if principalDf[permanova_columns].isna().any().any():
+            raise ValueError(
+                """NA values found in permanova_feature column(s).
+            Please fill NA values with a string (e.g. 'NA') before plotting."""
+            )
+        permanova_groups = list(
+            principalDf[permanova_columns].astype(str).agg(" x ".join, axis=1)
+        )
+        permanova_label = " x ".join(permanova_columns)
+        run_permanova = len(set(permanova_groups)) > 1
+
+    if run_permanova:
+        R2_AllGenes = np.round(get_MultiDimR2(x,permanova_groups,permanova_R2_ajusted),2)
+        R2_PC1andPC2 = np.round(get_MultiDimR2(principalComponents,permanova_groups,permanova_R2_ajusted),2)
 
     ###
     # PCA-only
@@ -201,6 +295,9 @@ def pca_plot(
         hue=hue,
         hue_order=hue_order,
         palette=palette,
+        style=style,
+        style_order=style_order,
+        markers=markers_arg,
     )
     if highlight_samples_list is not None:
         highlight_principalDf = principalDf.loc[
@@ -217,10 +314,12 @@ def pca_plot(
             hue=hue,
             hue_order=hue_order,
             palette=palette,
+            style=style,
+            style_order=style_order,
+            markers=markers_arg,
             legend=False,
         )
     if add_2D_KDE_countours:
-        k = 0
         for cat in hue_order:
             cat_data = principalDf.loc[principalDf[hue] == cat]
             if len(cat_data) >= 3:
@@ -231,8 +330,7 @@ def pca_plot(
                     fill=False,
                 levels=[0.25],
                 bw_adjust=bw_adjust,
-                color=palette[k])
-            k = k + 1
+                color=palette[cat])
     if add_text_labels_for_samples:
         texts = []
         for index, row in principalDf.iterrows():
@@ -256,10 +354,12 @@ def pca_plot(
         + str(int(np.round(pca.explained_variance_ratio_[1] * 100, 0)))
         + "% variance"
     )
-    if calculate_permanova_R2 and len(hue_order) > 1:
+    if run_permanova:
+        # name the grouping in the title only when it differs from the default (hue_feature)
+        permanova_by = "" if permanova_feature is None else " by " + permanova_label
         ax.set(title=str(len(data_df)) + " top expressed genes"+\
-               "\nPERMANOVA R2 (all genes) = "+str(R2_AllGenes)+\
-                "\nPERMANOVA R2 (PC1&PC2) = "+str(R2_PC1andPC2))
+               "\nPERMANOVA R2"+permanova_by+" (all genes) = "+str(R2_AllGenes)+\
+                "\nPERMANOVA R2"+permanova_by+" (PC1&PC2) = "+str(R2_PC1andPC2))
     else:
         ax.set(title=str(len(data_df)) + " top expressed genes")
     

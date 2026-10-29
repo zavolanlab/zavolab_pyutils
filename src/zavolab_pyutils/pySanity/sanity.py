@@ -25,6 +25,10 @@ from scipy.special import digamma, polygamma
 # Sanity Bayesian Normalization Implementation adapted from PMID: 33927416
 #####
 
+# Standard scale factor used to convert Sanity's raw fraction-of-library output
+# into interpretable, cross-run-comparable "CPM-like" units in log2 space.
+CPM_SCALE_FACTOR = 1e6
+
 # --- TOP-LEVEL MULTIPROCESSING WORKERS ---
 def _sanity_pass1_worker(args):
     i, n_g, exp_n_g, n_samples, min_variance = args
@@ -80,9 +84,14 @@ def _sanity_pass3_worker(args):
     opt_vars = 1.0 / (exp_n_g * np.exp(d) + 1.0 / v_optimal)
     return i, d, opt_vars
 
-def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond_col='condition', empirical_bayes=False, n_cores=None, min_variance=1e-12):
+def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond_col='condition', empirical_bayes=False, n_cores=None, min_variance=1e-12, cpm_scale_factor: float = CPM_SCALE_FACTOR):
     """
     Applies parallelized Sanity Bayesian normalization to RNA-seq counts.
+
+    Output expression values (`sample_norm_counts_df`, `means_df`) are reported as
+    log2(CPM-like) values: each gene's inferred fraction of the library is rescaled
+    by a fixed `cpm_scale_factor` (default 1e6, i.e. true counts-per-million), not by
+    this run's own median library size, so values stay comparable across separate calls.
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -171,8 +180,7 @@ def apply_sanity_normalization(counts_df, metadata_df, sample_col='sample', cond
     deltas_log2 = deltas / ln2
     variances_log2 = variances / (ln2**2)
     
-    median_lib_size = np.median(N_c)
-    log2_base_expr = np.log2(alpha_g * median_lib_size + 1e-18)
+    log2_base_expr = np.log2(alpha_g * cpm_scale_factor + 1e-18)
     
     sample_log2_expr = log2_base_expr[:, np.newaxis] + deltas_log2
     sample_norm_counts_df = pd.DataFrame(sample_log2_expr, index=genes, columns=common_samples)
@@ -327,10 +335,21 @@ def apply_sanity_normalization_full_bayesian(
     min_variance: float = 1e-12,
     n_cores: int = None,
     loess_variance_threshold_q: float = 0.1,
+    cpm_scale_factor: float = CPM_SCALE_FACTOR,
 ):
     """
     Applies the strict full Bayesian Sanity normalization to RNA-seq counts.
     Optionally applies Empirical Bayes shrinkage by deriving a prior from population trends.
+
+    Output expression values (`sample_norm_counts_df`, `means_df`) are reported as
+    log2(CPM-like) values: Sanity's inferred per-gene fraction of the library
+    is rescaled by a fixed `cpm_scale_factor` (default 1e6, i.e. true
+    counts-per-million), NOT by this run's own median library size. This makes
+    values comparable across separate calls to this function (e.g. on different
+    sample subsets), unlike in earlier versions of this function. `median_lib_size`
+    is still computed and returned for diagnostic purposes (reporting typical
+    sequencing depth of the input samples) but no longer acts as the output's
+    rescaling constant.
     """
     if metadata_df[sample_col].duplicated().any():
         raise ValueError(f"Duplicate entries found in metadata column '{sample_col}'.")
@@ -433,7 +452,7 @@ def apply_sanity_normalization_full_bayesian(
     global_error_var_log2 = global_error_var_nat / (ln2**2)
     
     median_lib_size = np.median(N_c)
-    sample_log2_expr = global_mean_log2[:, np.newaxis] + deltas_log2 + np.log2(median_lib_size)
+    sample_log2_expr = global_mean_log2[:, np.newaxis] + deltas_log2 + np.log2(cpm_scale_factor)
     sample_norm_counts_df = pd.DataFrame(sample_log2_expr, index=genes, columns=common_samples)
     
     cond_means = {}
@@ -444,7 +463,7 @@ def apply_sanity_normalization_full_bayesian(
         idx = np.where(sample_map == cond)[0]
         n_reps = len(idx)
         
-        cond_means[cond] = global_mean_log2 + np.mean(deltas_log2[:, idx], axis=1) + np.log2(median_lib_size)
+        cond_means[cond] = global_mean_log2 + np.mean(deltas_log2[:, idx], axis=1) + np.log2(cpm_scale_factor)
         
         empirical_var = np.var(deltas_log2[:, idx], axis=1, ddof=1) if n_reps > 1 else 0
         posterior_var = np.mean(variances_log2[:, idx], axis=1) 
