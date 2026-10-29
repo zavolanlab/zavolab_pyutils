@@ -13,6 +13,14 @@ import sys
 from argparse import ArgumentParser, RawTextHelpFormatter
 import HTSeq
 
+def count_loci(cur_alignment_list):
+    # paired-end reads have one record per mate at each locus, so the number of loci is
+    # the number of records of the mate with more alignments (a mate may be unmapped at some loci)
+    n_first = sum(1 for alignment in cur_alignment_list if alignment.pe_which == 'first')
+    n_second = sum(1 for alignment in cur_alignment_list if alignment.pe_which == 'second')
+    n_unpaired = len(cur_alignment_list) - n_first - n_second
+    return max(n_first, n_second) + n_unpaired
+
 def write_to_new_bam(cur_alignment_list, cur_NH, bam_writer, change_MAPQ, MAPQ_UM, MAPQ_MM):
     if change_MAPQ: # according to the methodology in STAR aligner, the MAPQ value is set to 255 for uniquely mapped reads
         if cur_NH == 1:
@@ -44,7 +52,8 @@ def write_to_new_bam(cur_alignment_list, cur_NH, bam_writer, change_MAPQ, MAPQ_U
         bam_writer.write(alignment)
 
 def main():
-    """ Parse dirty bam file and redefine correctly the quality string and NH tag value. Assumes that the input bam file is sorted by read name! """
+    """ Parse dirty bam file and redefine correctly the quality string and NH tag value. Assumes that the input bam file is sorted by read name!
+    NH is the number of loci of the read: for paired-end reads, the number of alignments of the mate with more alignments. """
     parser = ArgumentParser(description=main.__doc__, formatter_class=RawTextHelpFormatter)
 
     parser.add_argument("--input_bam_file", dest="input_bam_file", help="Path to the READ NAME - SORTED bam file.", required=True, metavar="FILE")
@@ -62,22 +71,20 @@ def main():
     almnt_file = HTSeq.SAM_Reader(options.input_bam_file)
     bam_writer = HTSeq.BAM_Writer.from_BAM_Reader(options.out_bam_file, almnt_file)
     
-    cur_name, cur_NH, cur_alignment_list = '', 0, []
+    cur_name, cur_alignment_list = '', []
     
     for almnt in almnt_file:
         read_name = almnt.read.name
         if cur_name != read_name:
             if cur_name != '':
-                write_to_new_bam(cur_alignment_list, cur_NH, bam_writer, options.change_MAPQ, options.MAPQ_UM, options.MAPQ_MM)
-            cur_NH = 0
+                write_to_new_bam(cur_alignment_list, count_loci(cur_alignment_list), bam_writer, options.change_MAPQ, options.MAPQ_UM, options.MAPQ_MM)
             cur_alignment_list = []    
             
-        cur_NH += 1
         cur_name = read_name
         cur_alignment_list.append(almnt)
 
     if len(cur_alignment_list) > 0:
-        write_to_new_bam(cur_alignment_list, cur_NH, bam_writer, options.change_MAPQ, options.MAPQ_UM, options.MAPQ_MM)
+        write_to_new_bam(cur_alignment_list, count_loci(cur_alignment_list), bam_writer, options.change_MAPQ, options.MAPQ_UM, options.MAPQ_MM)
         
     bam_writer.close()
 
